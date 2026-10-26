@@ -1,90 +1,108 @@
-import json
-
+import anthropic
 import httpx
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "qwen3.5:9b"
-SYSTEM_PROMPT = "You are an helpful assistant whose main job is to serve and help user however you can."
-TEMPERATURE = 0.7
+from .claude import claude_chat
+from .ollama import ask_with_stream
+
+SYSTEM_PROMPT = (
+    "You are an helpful assistant whose main job is to help users ethically."
+)
 CONTEXT_BUDGET = 300
+MODELS = ["qwen3.5:9b", "claude-haiku-5-5"]
 
 
-def ask_without_stream(messages: list[dict]) -> str:
-    payload = {"model": MODEL, "messages": messages, "think": False, "stream": False}
-    response = httpx.post(OLLAMA_URL, json=payload, timeout=120)
-    response.raise_for_status()
-    data = response.json()
-    return data["message"]["content"]
+def prompt_for_model_idx() -> int:
+    # prompt user to choose a model
+    for i, model in enumerate(MODELS):
+        print(f"{i} {model}")
+    while True:
+        selected_model_idx = input(f"Select a model (0 - {len(MODELS) - 1}): ")
+        try:
+            idx = int(selected_model_idx)
+        except ValueError:
+            print("Please enter a valid number.")
+            continue
+        if 0 <= idx < len(MODELS):
+            return idx
+
+        print("Out of range.")
 
 
-def ask_with_stream(messages: list[dict]) -> tuple[str, int]:
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "think": False,
-        "stream": True,
-        "options": {
-            "temperature": TEMPERATURE,
-        },
-    }
-    reply = ""
+def select_model(model_idx: int) -> str:
+    m = MODELS[model_idx]
+    print("Model selected: ", m)
+    return m
+
+
+def prompt_select_model() -> str:
+    i = prompt_for_model_idx()
+    m = select_model(i)
+    prewarm_cache(m)
+    return m
+
+
+def prewarm_cache(model: str) -> None:
+    if model.startswith("claude"):
+        return
+    ask_with_stream([], model, warmup=True)
+
+
+def ask(model: str, messages: list, system: str) -> tuple[str, dict]:
+    if model.startswith("claude"):
+        return claude_chat(messages=messages, model=model, system=system)
+    return ask_with_stream(
+        [{"role": "system", "content": system}] + messages, model=model
+    )
+
+
+def print_stats(stats: dict) -> None:
+    print(
+        f"\n[ context {stats['context']} toks . {stats['output_tokens']} out"
+        f" . {stats['tokens_per_sec']} tok/s . first token {stats['ttft']}s ]"
+    )
+
+
+def chat():
     context = 0
-    with httpx.stream("POST", OLLAMA_URL, json=payload, timeout=120) as response:
-        response.raise_for_status()
-        for line in response.iter_lines():
-            if not line:
-                continue
-            chunk = json.loads(line)
-            if chunk["done"]:
-                output_tokens = chunk["eval_count"]
-                input_tokens = chunk["prompt_eval_count"]
-                output_duration = (
-                    chunk["eval_duration"] / 1000000000
-                )  # convert to seconds
-                ttft = (
-                    chunk["load_duration"] + chunk["prompt_eval_duration"]
-                ) / 1000000000  # time to first token
-
-                context = input_tokens + output_tokens
-                tokens_per_sec = (output_tokens) / (output_duration)
-
-                print(
-                    f"\n[ Context: {context} tokens ]",
-                    f"\n[ {output_tokens} tokens out -> {tokens_per_sec:.1f} tok/s . first token {ttft:.1f}s ]\n"
+    primary_model = prompt_select_model()
+    context += len(SYSTEM_PROMPT) / 4
+    messages = []
+    usr_msg = input("Enter Message: ")
+    while usr_msg != "quit":
+        if usr_msg.startswith("/"):
+            command = "".join(usr_msg[1:].split())
+            if command in MODELS:
+                primary_model = command
+                print(f"Model Selected: {primary_model}")
+            else:
+                print("Invalid Model")
+                primary_model = prompt_select_model()
+        else:
+            try:
+                messages.append({"role": "user", "content": usr_msg})
+                # send conversation with new msg to model
+                res, stats = ask(
+                    model=primary_model, messages=messages, system=SYSTEM_PROMPT
                 )
-            piece = chunk["message"]["content"]
-            print(piece, end="", flush=True)
-            reply += piece
-    return reply, context
+                print_stats(stats)
+                messages.append({"role": "assistant", "content": res})
+                context = stats["context"]
+            except (
+                httpx.HTTPError,
+                anthropic.APIConnectionError,
+                anthropic.APIStatusError,
+            ):
+                print("Network Error: Unable to connect to server!")
+                temp = messages.pop()
+                context -= len(temp["content"]) / 4
+        usr_msg = input("Enter message: ")
+        # CONTEXT MANAGEMENT with estimated context and prev context
+        context += len(usr_msg) / 4
+        while len(messages) > 2 and context > CONTEXT_BUDGET:
+            for _ in range(2):
+                temp = messages.pop(0)
+                context -= len(temp["content"]) / 4
 
 
 def main() -> None:
-    context = 0
-    messages = []
-    messages.append({"role": "system", "content": SYSTEM_PROMPT})
-    user_msg = input("Enter your message: ")
-    while user_msg.lower() != "quit":
-        messages.append({"role": "user", "content": user_msg})
-
-        # est. context check before inference
-        estimated_prompt_context = len(user_msg) / 4
-        removed_count = 0
-        while len(messages) > 2 and context + estimated_prompt_context > CONTEXT_BUDGET:
-            for i in range(2): #remove pairs of users + assistant message so that message doesn't start with assistant response.
-                removed_msg = messages.pop(1)
-                context -= len(removed_msg["content"]) / 4
-                removed_count += 1
-
-        if removed_count != 0:
-            print(f"[Trimmed {removed_count} messages]")
-
-        # api call to LLM
-        try:
-            assistant_msg, response_context = ask_with_stream(list(messages))
-            context = response_context
-            messages.append({"role": "assistant", "content": assistant_msg})
-        except httpx.HTTPError as e:  # error handling
-            print("Error: ", e)
-            messages.pop()
-
-        user_msg = input("Enter your message: ")
+    chat()
