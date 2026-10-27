@@ -1,0 +1,26 @@
+name: CI
+
+#when: on every push and evey pull request
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    #where: a fesh linux macine from Github
+    runs-on: ubuntu-latest
+    steps:
+      #1 get code
+      - uses: actions/checkout@v7
+
+      #2 intall tools
+      - uses: astral-sh/setup-uv@v10.3.2
+
+      #3 lint check
+      - run: uv run --locked ruff check
+
+      #4 formatting
+      - run: uv run --locked ruff format --check
+
+      #tests
+      - run: run --locked pytest
