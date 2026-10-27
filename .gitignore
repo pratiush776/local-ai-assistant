@@ -10,3 +10,8 @@ wheels/
 .venv
 .env
 .zshrc
+# Private learning files (kept local)
+ROADMAP.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
