@@ -23,4 +23,4 @@ jobs:
       - run: uv run --locked ruff format --check
 
       #tests
-      - run: run --locked pytest
+      - run: uv run --locked pytest
