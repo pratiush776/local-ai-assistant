@@ -2,12 +2,13 @@ import anthropic
 import httpx
 
 from .claude import claude_chat
+from .context import estimate_tokens, trim_history
 from .ollama import ask_with_stream
 
 SYSTEM_PROMPT = (
     "You are an helpful assistant whose main job is to help users ethically."
 )
-CONTEXT_BUDGET = 300
+CONTEXT_BUDGET = 3000
 MODELS = ["qwen3.5:9b", "claude-haiku-5-5"]
 
 
@@ -65,7 +66,7 @@ def print_stats(stats: dict) -> None:
 def chat():
     context = 0
     primary_model = prompt_select_model()
-    context += len(SYSTEM_PROMPT) / 4
+    context += estimate_tokens(SYSTEM_PROMPT)
     messages = []
     usr_msg = input("Enter Message: ")
     while usr_msg != "quit":
@@ -93,15 +94,12 @@ def chat():
                 anthropic.APIStatusError,
             ):
                 print("Network Error: Unable to connect to server!")
-                temp = messages.pop()
-                context -= len(temp["content"]) / 4
+                msg = messages.pop()
+                context -= estimate_tokens(msg["content"])
         usr_msg = input("Enter message: ")
         # CONTEXT MANAGEMENT with estimated context and prev context
-        context += len(usr_msg) / 4
-        while len(messages) > 2 and context > CONTEXT_BUDGET:
-            for _ in range(2):
-                temp = messages.pop(0)
-                context -= len(temp["content"]) / 4
+        context += estimate_tokens(usr_msg)
+        messages, context = trim_history(messages, context, CONTEXT_BUDGET)
 
 
 def main() -> None:

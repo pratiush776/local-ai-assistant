@@ -8,8 +8,22 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets (never commit keys)
 .env
+.env.*
+!.env.example
 .zshrc
+
+# OS / editor
+.DS_Store
+
 # Private learning files (kept local)
 ROADMAP.md
 CLAUDE.md
