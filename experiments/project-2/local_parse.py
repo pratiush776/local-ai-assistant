@@ -3,6 +3,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel
 
+
 class Request(BaseModel):
     text:str
     label: Literal["chat","fact", "reasoning","action"]

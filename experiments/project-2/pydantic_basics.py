@@ -1,6 +1,7 @@
 from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+
 
 # describe shape using python type hints
 class Request(BaseModel):
