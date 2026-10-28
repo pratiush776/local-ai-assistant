@@ -1,6 +1,6 @@
 {
   "model": "qwen3.5:9b",
   "prompt": "answer this: I need to go for a car wash which is 5 min walk from my house. Should I walk or drive there?",
-  "stream": false,
+  "stream": true,
   "think": false
 }
