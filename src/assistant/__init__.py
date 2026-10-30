@@ -8,7 +8,7 @@ from .ollama import ask_with_stream
 SYSTEM_PROMPT = (
     "You are an helpful assistant whose main job is to help users ethically."
 )
-CONTEXT_BUDGET = 3000
+CONTEXT_BUDGET = 4096
 MODELS = ["qwen3.5:9b", "claude-haiku-5-5"]
 
 
