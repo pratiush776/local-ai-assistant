@@ -2,14 +2,17 @@ import anthropic
 import httpx
 
 from .claude import claude_chat
-from .context import estimate_tokens, trim_history
-from .ollama import ask_with_stream
+from .context import estimate_tokens, messages_to_text, trim_history
+from .decide import Decision, decide
+from .ollama import ask_with_stream, ask_without_stream
 
 SYSTEM_PROMPT = (
     "You are an helpful assistant whose main job is to help users ethically."
 )
 CONTEXT_BUDGET = 4096
 MODELS = ["qwen3.5:9b", "claude-haiku-5-5"]
+AUTO_ESCALATE = False
+PRIMARY_LOCAL_MODEL = MODELS[0]
 
 
 def prompt_for_model_idx() -> int:
@@ -48,6 +51,54 @@ def prewarm_cache(model: str) -> None:
     ask_with_stream([], model, warmup=True)
 
 
+def run_ctx_clarification(cur_msg_ctx: list) -> str:
+    cur_msg_ctx_txt = messages_to_text(cur_msg_ctx)
+    clarify_context_prompt = f"""Based on the conversation below, give out a final improved prompt in first person as if it was given by the user at once. It should include all the relevant information and the ask end to end as if it would be in a normal conversation.
+    The conversation exchange from the unclear message from the user that you have to compact and make one to be appended in the main context history:
+    {cur_msg_ctx_txt}
+    Note: if there is jsut one exchange that is user then just make it compact without losing the meaning."""
+    clarified_context = ask_without_stream(
+        [{"role": "user", "content": clarify_context_prompt}], PRIMARY_LOCAL_MODEL
+    )
+    return clarified_context
+
+
+def run_clarification(
+    usr_msg: str, decision: Decision, prev_context: str
+) -> tuple[str, Decision]:
+    cur_msg_ctx = [{"role": "user", "content": usr_msg}]
+    clarified_msg = usr_msg
+    while decision.route == "ask":
+        print("ask route!")
+
+        system = f"""You are internal prompt clarifier of an ai-assistant who finds the ambiguity in user prompt because the the assistant's router was unable to 
+        confidently categorize into neither 'chat', 'action', 'reason' nor 'fact' with the given context. So, in the given prompt find why and give a concise two or three sentence (always minimum) feedback to the user on 
+        how to improve it for the ai-assistant. Since you and the assistant are one, reply in first person and in friendly and problem solving way. DO NOT BE CONDESCENDING. 
+        Candidates that router narrowed down to: {decision.candidates}
+        Given Context: {prev_context}"""
+        clarify_msg = ask_without_stream(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "The given user prompt: " + usr_msg},
+            ],
+            PRIMARY_LOCAL_MODEL,
+        )
+        print(clarify_msg)
+
+        prev_context += "user: " + usr_msg + "\n" + "assistant: " + clarify_msg
+        cur_msg_ctx.append({"role": "assistant", "content": clarify_msg})
+
+        usr_msg = input("Enter message: ")
+        if usr_msg.strip() == "/escalate":
+            if len(cur_msg_ctx) > 2:
+                clarified_msg = run_ctx_clarification(cur_msg_ctx)
+            return clarified_msg, Decision(route="escalate")
+        cur_msg_ctx.append({"role": "user", "content": usr_msg})
+        decision = decide(usr_msg, prev_context, AUTO_ESCALATE)
+    clarified_msg = run_ctx_clarification(cur_msg_ctx)
+    return clarified_msg, decision
+
+
 def ask(model: str, messages: list, system: str) -> tuple[str, dict]:
     if model.startswith("claude"):
         return claude_chat(messages=messages, model=model, system=system)
@@ -65,29 +116,35 @@ def print_stats(stats: dict) -> None:
 
 def chat():
     context = 0
-    primary_model = prompt_select_model()
+    primary_model = PRIMARY_LOCAL_MODEL
+    prewarm_cache(primary_model)
     context += estimate_tokens(SYSTEM_PROMPT)
     messages = []
     usr_msg = input("Enter Message: ")
     while usr_msg != "quit":
-        if usr_msg.startswith("/"):
-            command = "".join(usr_msg[1:].split())
-            if command in MODELS:
-                primary_model = command
-                print(f"Model Selected: {primary_model}")
-            else:
-                print("Invalid Model")
-                primary_model = prompt_select_model()
+        if usr_msg == "/model":
+            primary_model = prompt_select_model()
         else:
             try:
-                messages.append({"role": "user", "content": usr_msg})
-                # send conversation with new msg to model
-                res, stats = ask(
-                    model=primary_model, messages=messages, system=SYSTEM_PROMPT
-                )
-                print_stats(stats)
-                messages.append({"role": "assistant", "content": res})
-                context = stats["context"]
+                prev_context = messages_to_text(messages)
+                decision = decide(usr_msg, prev_context, AUTO_ESCALATE)
+                clarified_msg = usr_msg
+                if decision.route == "ask":
+                    clarified_msg, decision = run_clarification(
+                        usr_msg, decision, prev_context
+                    )
+                if decision.route == "local":
+                    print("local route")
+                    messages.append({"role": "user", "content": clarified_msg})
+                    # send conversation with new msg to model
+                    res, stats = ask(
+                        model=primary_model, messages=messages, system=SYSTEM_PROMPT
+                    )
+                    print_stats(stats)
+                    messages.append({"role": "assistant", "content": res})
+                    context = stats["context"]
+                elif decision.route == "escalate":
+                    print("WILL BE ESCALTED. (not implemented)")
             except (
                 httpx.HTTPError,
                 anthropic.APIConnectionError,

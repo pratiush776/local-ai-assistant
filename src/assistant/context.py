@@ -9,3 +9,10 @@ def trim_history(messages: list, context: float, budget: int) -> tuple[list, flo
             msg = trimmed_messages.pop(0)
             context -= estimate_tokens(msg["content"])
     return trimmed_messages, context
+
+
+def messages_to_text(messages: list) -> str:
+    text = ""
+    for msg in messages:
+        text += msg["role"] + ": " + msg["content"] + "\n"
+    return text.strip()

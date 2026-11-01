@@ -38,7 +38,7 @@ If several fit, pick the first in this order: action, fact, reason, chat."""
 class Decision(BaseModel):
     route: Route
     label: Label | None = None  # the winner when route == "local"
-    confidence: float  # the top label's probability
+    confidence: float = 0.0  # the top label's probability
     candidates: list[str] = []  # the live labels when route != "local"
 
 

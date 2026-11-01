@@ -1,4 +1,4 @@
-from assistant.context import estimate_tokens, trim_history
+from assistant.context import estimate_tokens, messages_to_text, trim_history
 
 
 # helper: builds a valid message with n_tokens long
@@ -46,3 +46,19 @@ def test_trim_atleast_keeps_last_pair_even_over_budget():
     trimmed, _context = trim_history(messages, 40, 5)
 
     assert len(trimmed) == 2
+
+
+def test_context_to_text_empty():
+    text = messages_to_text([])
+
+    assert text == ""
+
+
+def test_context_to_text_formats_turns():
+    messages = [
+        {"role": "user", "content": "My name is Sam."},
+        {"role": "assistant", "content": "Hi Sam, how can I help you today?"},
+    ]
+    text = messages_to_text(messages)
+    expected = """user: My name is Sam.\nassistant: Hi Sam, how can I help you today?"""
+    assert text == expected
