@@ -13,6 +13,7 @@ CONTEXT_BUDGET = 4096
 MODELS = ["qwen3.5:9b", "claude-haiku-5-5"]
 AUTO_ESCALATE = False
 PRIMARY_LOCAL_MODEL = MODELS[0]
+ESCALATE_MODEL = MODELS[1]
 
 
 def prompt_for_model_idx() -> int:
@@ -144,7 +145,14 @@ def chat():
                     messages.append({"role": "assistant", "content": res})
                     context = stats["context"]
                 elif decision.route == "escalate":
-                    print("WILL BE ESCALTED. (not implemented)")
+                    print("escalating to Claude...")
+                    messages.append({"role": "user", "content": clarified_msg})
+                    res, stats = ask(
+                        model=ESCALATE_MODEL, messages=messages, system=SYSTEM_PROMPT
+                    )
+                    print_stats(stats)
+                    messages.append({"role": "assistant", "content": res})
+                    context = stats["context"]
             except (
                 httpx.HTTPError,
                 anthropic.APIConnectionError,
