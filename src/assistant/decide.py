@@ -27,12 +27,30 @@ Label = Literal["action", "fact", "reason", "chat"]
 Route = Literal["local", "ask", "escalate"]
 LABELS: set[Label] = {"action", "fact", "reason", "chat"}
 
-LABEL_RULES = """Labels (what the NEXT step needs that a plain local chat model doesn't have):
-- action: needs tools and the user's approval; it changes something in the world (send, book, set, buy).
-- fact: needs outside or personal info not already in the conversation (files, notes, the web, anything recent).
-- reason: needs multi-step thinking; all the information is already present.
-- chat: needs nothing extra; answerable directly, including writing, rewriting, summarising, translating.
+LABEL_RULES = """- action: needs a tool and your approval to change something in the world (send, book, set, buy, schedule, delete).
+- fact: the user is asking for a specific real-world fact, name, date, number, or current/personal info they do not provide — choose fact EVEN IF you think you know it. (Asking you to create, write, suggest, or brainstorm something is NOT fact.)
+- reason: answering needs calculation or multi-step deduction — choose reason even if it looks simple.
+- chat: needs nothing external and no calculation — writing, rewriting, summarising, translating, giving an opinion, or creating/brainstorming/suggesting open-ended content (ideas, plans, lists), even if it draws on general knowledge.
 If several fit, pick the first in this order: action, fact, reason, chat."""
+
+LABEL_EXAMPLES = """Request: Write a short poem about autumn.
+Answer: chat
+Request: Create a workout plan to strengthen my upper body.
+Answer: chat
+Request: Give me some ideas for a 5-year-old's birthday party.
+Answer: chat
+Request: Who won the Nobel Prize in Physics in 2019?
+Answer: fact
+Request: What is the current population of Tokyo?
+Answer: fact
+Request: A shirt costs $40 after a 20% discount. What was the original price?
+Answer: reason
+Request: I have meetings at 2pm, 3pm and 4pm, each 45 minutes. Do any overlap?
+Answer: reason
+Request: Send an email to Sam asking to reschedule Friday.
+Answer: action
+Request: Set a reminder for my dentist appointment tomorrow at 9am.
+Answer: action"""
 
 
 class Decision(BaseModel):
@@ -45,14 +63,17 @@ class Decision(BaseModel):
 def label_scores(request: str, context: str = "") -> dict[str, float]:
     """One forward pass: read the first-token logprobs, return raw
     distribution over the 4 labels."""
-    prompt = f"""Classify the NEXT step this request needs, given the conversation so far.
+    prompt = f"""Classify what the user's NEXT step needs. Reply with ONE word: action, fact, reason, or chat.
 {LABEL_RULES}
+
+Examples:
+{LABEL_EXAMPLES}
 
 Conversation so far:
 {context or "(none)"}
 
 Request: {request}
-Reply with only the one word."""
+Answer:"""
     payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],

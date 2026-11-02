@@ -85,7 +85,7 @@ def run_clarification(
         )
         print(clarify_msg)
 
-        prev_context += "user: " + usr_msg + "\n" + "assistant: " + clarify_msg
+        prev_context += "\nuser: " + usr_msg + "\n" + "assistant: " + clarify_msg
         cur_msg_ctx.append({"role": "assistant", "content": clarify_msg})
 
         usr_msg = input("Enter message: ")
