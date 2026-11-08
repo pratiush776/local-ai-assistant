@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ask my notes</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 640px;
+        margin: 48px auto;
+        padding: 0 16px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+      input {
+        flex: 1;
+        padding: 10px;
+        font-size: 16px;
+      }
+      button {
+        padding: 10px 16px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      #out {
+        margin-top: 24px;
+        white-space: pre-wrap;
+        line-height: 1.5;
+      }
+      .cite {
+        color: #666;
+        font-size: 13px;
+        margin-top: 12px;
+      }
+      .muted {
+        color: #999;
+      }
+      .timings {
+        color: #888;
+        font-size: 12px;
+        margin-top: 16px;
+        border-top: 1px solid #eee;
+        padding-top: 8px;
+        font-family: ui-monospace, monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Ask my notes</h2>
+    <div class="row">
+      <input id="q" placeholder="when is my dentist appointment?" autofocus />
+      <button id="go">Ask</button>
+    </div>
+    <div id="out"></div>
+
+    <script>
+      const out = document.getElementById("out");
+      async function ask() {
+        const question = document.getElementById("q").value.trim();
+        if (!question) return;
+        out.innerHTML = '<span class="muted">thinking…</span>';
+        const started = performance.now();
+        try {
+          const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ question }),
+          });
+          const data = await res.json();
+          const clientMs = Math.round(performance.now() - started);
+          out.innerHTML = "";
+          if (data.not_found) {
+            const m = document.createElement("div");
+            m.className = "muted";
+            m.textContent = "Not found — nothing relevant in your notes.";
+            out.appendChild(m);
+          } else {
+            out.textContent = data.answer;
+            if (data.citations?.length) {
+              const c = document.createElement("div");
+              c.className = "cite";
+              c.textContent = "sources: " + data.citations.join(", ");
+              out.appendChild(c);
+            }
+          }
+          renderTimings(data.timings, clientMs);
+        } catch (e) {
+          out.innerHTML = '<span class="muted">error: ' + e.message + "</span>";
+        }
+      }
+
+      function renderTimings(t, clientMs) {
+        if (!t) return;
+        const order = ["1_embed_ms", "2_retrieve_ms", "3_rerank_ms", "4_generate_ms", "total_ms"];
+        const label = { "1_embed_ms": "embed", "2_retrieve_ms": "retrieve", "3_rerank_ms": "rerank", "4_generate_ms": "generate", "total_ms": "TOTAL" };
+        const lines = order.filter((k) => k in t).map((k) => label[k].padEnd(9) + String(t[k]).padStart(6) + " ms");
+        const extra = [];
+        if (t.gen_model_load_ms !== undefined)
+          extra.push("llm load " + t.gen_model_load_ms + "ms (" + (t.gen_model_load_ms < 50 ? "warm" : "COLD-loaded") + ")");
+        if (t.gen_output_tokens !== undefined) extra.push("output " + t.gen_output_tokens + " tok");
+        extra.push("client round-trip " + clientMs + "ms");
+        const div = document.createElement("div");
+        div.className = "timings";
+        div.textContent = lines.join("\n") + "\n" + extra.join(" · ");
+        out.appendChild(div);
+      }
+      document.getElementById("go").onclick = ask;
+      document.getElementById("q").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") ask();
+      });
+    </script>
+  </body>
+</html>

@@ -26,6 +26,7 @@ htmlcov/
 
 # Private learning files (kept local)
 ROADMAP.md
+roadmap/
 CLAUDE.md
 CLAUDE.local.md
 .claude/

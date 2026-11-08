@@ -1,17 +1,17 @@
-# ollama embeddings call 
+# ollama embeddings call
 import httpx
 
 URL = "http://localhost:11434/api/embed"
 
 payload = {
-    "model":"nomic-embed-text",
-    "input":[
+    "model": "nomic-embed-text",
+    "input": [
         "search_document: The cat sat on the mat.",
-        "search_document: A dog barked in the yard."
-    ]
+        "search_document: A dog barked in the yard.",
+    ],
 }
 
-r = httpx.post(URL,json=payload,timeout=300)
+r = httpx.post(URL, json=payload, timeout=300)
 r.raise_for_status()
 data = r.json()
 

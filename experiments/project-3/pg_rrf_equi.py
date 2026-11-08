@@ -1,23 +1,23 @@
-
 import httpx, numpy as np, psycopg
 from pgvector.psycopg import register_vector
 
 DSN = "postgresql://postgres:rag@localhost:5432/postgres"
 
-def embed_query(text:str) -> np.ndarray:
-    r = httpx.post("http://localhost:11434/api/embed",
-                   json={
-                       "model":"nomic-embed-text",
-                       "input":[f"query_document: {text}"]
-                   },
-                   timeout=300)
+
+def embed_query(text: str) -> np.ndarray:
+    r = httpx.post(
+        "http://localhost:11434/api/embed",
+        json={"model": "nomic-embed-text", "input": [f"query_document: {text}"]},
+        timeout=300,
+    )
     r.raise_for_status()
     return np.array(r.json()["embeddings"][0])
 
-query = "beagle" 
+
+query = "beagle"
 q = embed_query(query)
 
-SQL ="""
+SQL = """
 WITH vector AS (                                        -- lane 1 ranking
     SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> %(q)s) AS rank
     FROM docs ORDER BY embedding <=> %(q)s LIMIT 20
@@ -39,5 +39,5 @@ LIMIT 5;
 
 with psycopg.connect(DSN) as conn:
     register_vector(conn)
-    for sentence, rrf in conn.execute(SQL, {"q":q, "text":query}).fetchall():
+    for sentence, rrf in conn.execute(SQL, {"q": q, "text": query}).fetchall():
         print(f" {rrf:.4f} {sentence}")
