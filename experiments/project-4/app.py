@@ -1,9 +1,12 @@
-from contextlib import asynccontextmanager
 import time
-import httpx, numpy as np, psycopg
+from contextlib import asynccontextmanager
+
+import httpx
+import numpy as np
+import psycopg
 from fastapi import FastAPI
-from pydantic import BaseModel
 from pgvector.psycopg import register_vector
+from pydantic import BaseModel
 from sentence_transformers import CrossEncoder
 
 DSN = "postgresql://postgres:rag@localhost:5432/postgres"
@@ -59,7 +62,9 @@ def generate(question: str, kept: list[tuple[str, str]]) -> str:
     )
     r.raise_for_status()
     d = r.json()
-    return d["message"]["content"], d  # answer + raw response (has load_duration, eval_count)
+    return d["message"][
+        "content"
+    ], d  # answer + raw response (has load_duration, eval_count) #type: ignore
 
 
 # --- load model once at startup
@@ -118,7 +123,9 @@ def ask(req: AskRequest) -> AskResponse:
                 HYBRID_SQL, {"q": q_vec, "t": req.question}
             ).fetchall()
         ]
-    T["2_retrieve_ms"] = round((time.perf_counter() - t1) * 1000)  # both lanes, one SQL query
+    T["2_retrieve_ms"] = round(
+        (time.perf_counter() - t1) * 1000
+    )  # both lanes, one SQL query
 
     t2 = time.perf_counter()
     scores = STATE["reranker"].predict([[req.question, t] for _, t in shortlist])
@@ -136,18 +143,17 @@ def ask(req: AskRequest) -> AskResponse:
 
     # Ollama's own load_duration: ~0 = model was warm; big = it cold-loaded this request
     T["embed_model_load_ms"] = round(emeta.get("load_duration", 0) / 1e6)
-    T["gen_model_load_ms"] = round(gmeta.get("load_duration", 0) / 1e6)
-    T["gen_output_tokens"] = gmeta.get("eval_count")
+    T["gen_model_load_ms"] = round(gmeta.get("load_duration", 0) / 1e6)  # type: ignore
+    T["gen_output_tokens"] = gmeta.get("eval_count")  # type: ignore
     T["total_ms"] = round((time.perf_counter() - t0) * 1000)
     print("TIMINGS:", T)
-    return AskResponse(
-        answer=answer, citations=[cid for cid, _ in kept], timings=T
-    )
+    return AskResponse(answer=answer, citations=[cid for cid, _ in kept], timings=T)
 
 
 # --- webpage endpoint
-from fastapi.responses import HTMLResponse
 from pathlib import Path
+
+from fastapi.responses import HTMLResponse
 
 
 @app.get("/", response_class=HTMLResponse)

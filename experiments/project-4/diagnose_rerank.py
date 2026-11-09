@@ -1,9 +1,11 @@
 """Grounded three-way diagnosis: context limit + how often each reranker demotes
 the relevant doc below hybrid's position, on a SciFact slice."""
+
+from collections import defaultdict
+
 import httpx
 import numpy as np
 import psycopg
-from collections import defaultdict
 from datasets import load_dataset
 from pgvector.psycopg import register_vector
 from sentence_transformers import CrossEncoder  # type: ignore[reportPrivateImportUsage]
@@ -26,8 +28,14 @@ test_ids = list(relevant)[:N]
 
 
 def embed(batch):
-    r = httpx.post("http://localhost:11434/api/embed",
-                   json={"model": "nomic-embed-text", "input": [f"search_query: {t}" for t in batch]}, timeout=600)
+    r = httpx.post(
+        "http://localhost:11434/api/embed",
+        json={
+            "model": "nomic-embed-text",
+            "input": [f"search_query: {t}" for t in batch],
+        },
+        timeout=600,
+    )
     r.raise_for_status()
     return [np.array(v) for v in r.json()["embeddings"]]
 
@@ -48,7 +56,12 @@ shortlists = {}
 with psycopg.connect(DSN) as conn:
     register_vector(conn)
     for qid in test_ids:
-        shortlists[qid] = [(d, t) for d, t, _ in conn.execute(HYBRID_SQL, {"q": qvecs[qid], "t": qtext[qid]}).fetchall()]
+        shortlists[qid] = [
+            (d, t)
+            for d, t, _ in conn.execute(
+                HYBRID_SQL, {"q": qvecs[qid], "t": qtext[qid]}
+            ).fetchall()
+        ]
 
 
 def rank_of_rel(ids, rel):
@@ -58,20 +71,27 @@ def rank_of_rel(ids, rel):
     return 99
 
 
-hyb_rank = {qid: rank_of_rel([d for d, _ in shortlists[qid]], relevant[qid]) for qid in test_ids}
+hyb_rank = {
+    qid: rank_of_rel([d for d, _ in shortlists[qid]], relevant[qid]) for qid in test_ids
+}
 
 print(f"{'model':40}{'ctx_limit':>10}{'truncated%':>12}{'demotions':>11}")
 for m in MODELS:
     model = CrossEncoder(m)
     limit = model.model.config.max_position_embeddings
-    over = sum(len(model.tokenizer.encode(qtext[qid], t, truncation=False)) > limit
-               for qid in test_ids for _, t in shortlists[qid])
+    over = sum(
+        len(model.tokenizer.encode(qtext[qid], t, truncation=False)) > limit
+        for qid in test_ids
+        for _, t in shortlists[qid]
+    )
     total = sum(len(shortlists[qid]) for qid in test_ids)
     demoted = 0
     for qid in test_ids:
         sl = shortlists[qid]
         s = model.predict([[qtext[qid], t] for _, t in sl])
-        ids = [sl[i][0] for i in sorted(range(len(sl)), key=lambda i: s[i], reverse=True)]
+        ids = [
+            sl[i][0] for i in sorted(range(len(sl)), key=lambda i: s[i], reverse=True)
+        ]
         demoted += rank_of_rel(ids, relevant[qid]) > hyb_rank[qid]
     print(f"{m:40}{limit:>10}{over / total:>11.0%}{demoted:>8}/{N}")
     del model

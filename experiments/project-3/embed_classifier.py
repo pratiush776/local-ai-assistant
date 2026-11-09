@@ -1,9 +1,10 @@
 import json
-import numpy as np
+
 import httpx
+import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
 
 # --- block 1: load the 800 labeled rows ---
 rows = [json.loads(l) for l in open("data/testset.jsonl")]

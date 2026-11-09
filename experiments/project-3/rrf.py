@@ -1,9 +1,10 @@
 """using rrf to fuse retrival from vector ranker and bm25 ranker"""
 
 from collections import defaultdict
-import numpy as np
-import httpx
+
 import bm25s
+import httpx
+import numpy as np
 
 
 # vector ranker brute force
@@ -56,7 +57,7 @@ def main() -> None:
         rank2 = bm25_search(sentences, query)
         rrf_scores = reciprocal_rank_fusion([list(rank1), rank2], 60)
 
-        print("")
+        print()
         for i in rrf_scores:
             print(f"{sentences[i]}")
 

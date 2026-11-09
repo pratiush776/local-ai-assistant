@@ -1,4 +1,6 @@
-import httpx, numpy as np, psycopg
+import httpx
+import numpy as np
+import psycopg
 from pgvector.psycopg import register_vector
 from sentence_transformers import CrossEncoder
 

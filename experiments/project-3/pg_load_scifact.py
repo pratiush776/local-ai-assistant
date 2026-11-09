@@ -1,6 +1,8 @@
-import httpx, numpy as np, psycopg
-from pgvector.psycopg import register_vector
+import httpx
+import numpy as np
+import psycopg
 from datasets import load_dataset
+from pgvector.psycopg import register_vector
 
 DSN = "postgresql://postgres:rag@localhost:5432/postgres"
 URL = "http://localhost:11434/api/embed"

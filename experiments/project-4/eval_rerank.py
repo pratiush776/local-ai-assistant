@@ -1,10 +1,11 @@
 """Measure the reranker's impact on SciFact: hybrid top-20, metrics before vs
 after a cross-encoder rerank. recall@3, recall@5, MRR."""
 
+from collections import defaultdict
+
 import httpx
 import numpy as np
 import psycopg
-from collections import defaultdict
 from datasets import load_dataset
 from pgvector.psycopg import register_vector
 from sentence_transformers import CrossEncoder  # type: ignore[reportPrivateImportUsage]

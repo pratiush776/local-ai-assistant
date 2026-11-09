@@ -1,9 +1,11 @@
-import httpx, numpy as np, psycopg
-from docling.document_converter import DocumentConverter
-from docling.chunking import HybridChunker  # type: ignore[reportPrivateImportUsage]
 import hashlib
-from pgvector.psycopg import register_vector
 
+import httpx
+import numpy as np
+import psycopg
+from docling.chunking import HybridChunker  # type: ignore[reportPrivateImportUsage]
+from docling.document_converter import DocumentConverter
+from pgvector.psycopg import register_vector
 
 converter = DocumentConverter()
 

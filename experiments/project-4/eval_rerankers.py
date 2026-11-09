@@ -1,12 +1,14 @@
 """Compare rerankers on a SciFact slice: recall@3/@5/MRR + ms/query.
 Retrieve the hybrid top-20 once per query, then rerank with each model on the
 same inputs. A 'no rerank' baseline (hybrid order) sits on top for reference."""
+
 import gc
 import time
+from collections import defaultdict
+
 import httpx
 import numpy as np
 import psycopg
-from collections import defaultdict
 from datasets import load_dataset
 from pgvector.psycopg import register_vector
 from sentence_transformers import CrossEncoder  # type: ignore[reportPrivateImportUsage]
@@ -14,9 +16,9 @@ from sentence_transformers import CrossEncoder  # type: ignore[reportPrivateImpo
 DSN = "postgresql://postgres:rag@localhost:5432/postgres"
 N = 100
 MODELS = [
-    "BAAI/bge-reranker-v2-m3",              # current (~2.3 GB)
-    "BAAI/bge-reranker-base",               # smaller (~0.5 GB)
-    "cross-encoder/ms-marco-MiniLM-L-6-v2", # tiny (~0.08 GB)
+    "BAAI/bge-reranker-v2-m3",  # current (~2.3 GB)
+    "BAAI/bge-reranker-base",  # smaller (~0.5 GB)
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",  # tiny (~0.08 GB)
 ]
 
 qrels = load_dataset("BeIR/scifact-qrels")["test"]
@@ -29,15 +31,21 @@ test_ids = list(relevant)[:N]
 
 
 def embed(batch):
-    r = httpx.post("http://localhost:11434/api/embed",
-                   json={"model": "nomic-embed-text", "input": [f"search_query: {t}" for t in batch]}, timeout=600)
+    r = httpx.post(
+        "http://localhost:11434/api/embed",
+        json={
+            "model": "nomic-embed-text",
+            "input": [f"search_query: {t}" for t in batch],
+        },
+        timeout=600,
+    )
     r.raise_for_status()
     return [np.array(v) for v in r.json()["embeddings"]]
 
 
 qvecs = {}
 for i in range(0, len(test_ids), 128):
-    c = test_ids[i:i + 128]
+    c = test_ids[i : i + 128]
     for q, v in zip(c, embed([qtext[x] for x in c])):
         qvecs[q] = v
 
@@ -87,7 +95,9 @@ with psycopg.connect(DSN) as conn:
 
 print(f"{'model':40}{'r@3':>8}{'r@5':>8}{'MRR':>8}{'ms/q':>9}")
 base = metrics({qid: [d for d, _ in shortlists[qid]] for qid in test_ids})
-print(f"{'hybrid (no rerank)':40}{base['r@3']:>8.3f}{base['r@5']:>8.3f}{base['mrr']:>8.3f}{'-':>9}")
+print(
+    f"{'hybrid (no rerank)':40}{base['r@3']:>8.3f}{base['r@5']:>8.3f}{base['mrr']:>8.3f}{'-':>9}"
+)
 
 for m in MODELS:
     model = CrossEncoder(m)
