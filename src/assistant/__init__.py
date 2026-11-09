@@ -1,6 +1,7 @@
 import anthropic
 import httpx
 
+from . import rag
 from .claude import claude_chat
 from .context import estimate_tokens, messages_to_text, trim_history
 from .decide import Decision, decide
@@ -127,6 +128,7 @@ def chat():
             primary_model = prompt_select_model()
         else:
             try:
+                turn_stored = False  # True once this turn's msgs are in history
                 prev_context = messages_to_text(messages)
                 decision = decide(usr_msg, prev_context, AUTO_ESCALATE)
                 clarified_msg = usr_msg
@@ -135,18 +137,44 @@ def chat():
                         usr_msg, decision, prev_context
                     )
                 if decision.route == "local":
-                    print("local route")
-                    messages.append({"role": "user", "content": clarified_msg})
-                    # send conversation with new msg to model
-                    res, stats = ask(
-                        model=primary_model, messages=messages, system=SYSTEM_PROMPT
-                    )
-                    print_stats(stats)
-                    messages.append({"role": "assistant", "content": res})
-                    context = stats["context"]
+                    if decision.label == "fact":
+                        # 1. retrieve+rerank+threshold the clean question
+                        hits = rag.rag_search(clarified_msg)
+                        if not hits:
+                            # 2a. honest not-found (escalate/provide-info come later)
+                            print("I don't have that in your files.")
+                        else:
+                            # 2b. grounded answer: transient context, clean history
+                            ctx = rag.format_context(hits)
+                            grounded = {
+                                "role": "user",
+                                "content": f"{ctx}\n\nQuestion: {clarified_msg}",
+                            }
+                            res, stats = ask(
+                                primary_model,
+                                messages + [grounded],
+                                system=rag.RAG_SYSTEM_PROMPT,
+                            )
+                            print_stats(stats)
+                            messages.append({"role": "user", "content": clarified_msg})
+                            messages.append({"role": "assistant", "content": res})
+                            turn_stored = True
+                            context = estimate_tokens(messages_to_text(messages))
+                    else:
+                        print("local route")
+                        messages.append({"role": "user", "content": clarified_msg})
+                        turn_stored = True
+                        # send conversation with new msg to model
+                        res, stats = ask(
+                            model=primary_model, messages=messages, system=SYSTEM_PROMPT
+                        )
+                        print_stats(stats)
+                        messages.append({"role": "assistant", "content": res})
+                        context = stats["context"]
                 elif decision.route == "escalate":
                     print("escalating to Claude...")
                     messages.append({"role": "user", "content": clarified_msg})
+                    turn_stored = True
                     res, stats = ask(
                         model=ESCALATE_MODEL, messages=messages, system=SYSTEM_PROMPT
                     )
@@ -159,8 +187,9 @@ def chat():
                 anthropic.APIStatusError,
             ):
                 print("Network Error: Unable to connect to server!")
-                msg = messages.pop()
-                context -= estimate_tokens(msg["content"])
+                if turn_stored:
+                    msg = messages.pop()
+                    context -= estimate_tokens(msg["content"])
         usr_msg = input("Enter message: ")
         # CONTEXT MANAGEMENT with estimated context and prev context
         context += estimate_tokens(usr_msg)

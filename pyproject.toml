@@ -35,3 +35,8 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.17.2",
 ]
+
+[tool.ruff]
+# experiments/ are prototype/practice scratchpads; lint the production surface
+# (src/ + tests/). Prototypes get cleaned up when promoted into src/.
+extend-exclude = ["experiments"]

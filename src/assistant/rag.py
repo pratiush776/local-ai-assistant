@@ -1,0 +1,143 @@
+import hashlib
+from typing import Literal
+
+import httpx
+import numpy as np
+import psycopg
+from docling.chunking import HybridChunker  # type: ignore[reportPrivateImportUsage]
+from docling.document_converter import DocumentConverter
+from pgvector.psycopg import register_vector
+from sentence_transformers import CrossEncoder
+
+# --- config (single source of truth) ---
+DSN = "postgresql://postgres:rag@localhost:5432/postgres"
+OLLAMA_URL = "http://localhost:11434/api/"
+EMBED_MODEL = "nomic-embed-text"
+GEN_MODEL = "qwen3.5:9b"
+RERANKER_NAME = "BAAI/bge-reranker-v2-m3"
+RRF_K = 60
+# recall-favouring pre-filter, not the honesty gate: no single threshold separates
+# relevant from noise (France/Lisbon noise scored 0.31 > real answers at 0.24), so we
+# keep this low and let grounded generation refuse near-miss noise. Provisional until
+# the personal-files eval (#5) calibrates it. See ROADMAP "To review".
+RERANK_THRESHOLD = 0.01
+TOP_K = 10
+_RERANKER = None  # module-level cache, starts empty
+RAG_SYSTEM_PROMPT = """Answer using ONLY the numbered context below. Cite the source number [n] with exact text used from the context to create the response
+for reference so that the user can trace it back for every fact respectively.
+If the context does not contain the answer, say you don't have it truthfully."""
+
+
+def embed(
+    texts: list[str], task_prefix: Literal["search_query", "search_document"]
+) -> np.ndarray:
+    payload = {
+        "model": EMBED_MODEL,
+        "input": [f"{task_prefix}: {text}" for text in texts],
+    }
+    r = httpx.post(OLLAMA_URL + "embed", json=payload, timeout=120)
+    r.raise_for_status()
+    return np.array(r.json()["embeddings"])
+
+
+def hybrid_retrieve(
+    question: str, k=TOP_K
+) -> list[tuple[str, str]]:  # (chunk_id, text), #3
+    # DB search
+    SQL = """
+WITH vec AS (
+    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %(q)s) rank
+    FROM chunks ORDER BY embedding <=> %(q)s LIMIT %(k)s
+),kw AS (
+    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY paradedb.score(chunk_id) DESC) rank
+    FROM chunks WHERE chunk_id @@@ paradedb.match('text', %(t)s) LIMIT %(k)s
+)
+SELECT c.chunk_id, c.text, 
+    COALESCE(1.0/(%(rrf_k)s+vec.rank),0) + COALESCE(1.0/(%(rrf_k)s+kw.rank),0) AS rrf
+FROM vec FULL OUTER JOIN kw USING (chunk_id)
+JOIN chunks c ON c.chunk_id = COALESCE(vec.chunk_id, kw.chunk_id)
+ORDER BY rrf DESC LIMIT %(k)s;
+"""
+    query_vector = embed([question], "search_query")[0]
+    with psycopg.connect(DSN) as conn:
+        register_vector(conn)
+        rows = conn.execute(
+            SQL, {"q": query_vector, "t": question, "rrf_k": RRF_K, "k": k}
+        ).fetchall()
+    return [(cid, text) for cid, text, _ in rows]
+
+
+def _reranker() -> CrossEncoder:
+    global _RERANKER
+    if _RERANKER is None:
+        _RERANKER = CrossEncoder(RERANKER_NAME)
+    return _RERANKER
+
+
+def warmup_reranker() -> None:
+    _reranker()
+
+
+def rag_search(question: str) -> list[tuple[str, str]]:
+    relevant_docs = hybrid_retrieve(question, TOP_K)
+    scores = _reranker().predict([[question, text] for _, text in relevant_docs])
+    reranked = sorted(zip(relevant_docs, scores), key=lambda x: x[1], reverse=True)
+    return [(cid, text) for (cid, text), score in reranked if score >= RERANK_THRESHOLD]
+
+
+def format_context(hits: list[tuple[str, str]]) -> str:
+    return "".join(
+        [f"[{i + 1}] (source={cid}) {text}\n" for i, (cid, text) in enumerate(hits)]
+    )
+
+
+def ingest(path: str) -> dict:
+    doc = DocumentConverter().convert(path).document
+    chunker = HybridChunker()
+    chunks = list(chunker.chunk(doc))
+
+    rows = []
+    for ch in chunks:
+        text = chunker.contextualize(chunk=ch)
+        cid = hashlib.sha256(text.encode()).hexdigest()[:16]
+        rows.append((cid, path, text))
+
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        register_vector(conn)
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.execute("CREATE EXTENSION IF NOT EXISTS pg_search")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chunks (
+            chunk_id text PRIMARY KEY,
+            source text NOT NULL,
+            text text NOT NULL,
+            embedding vector(768)
+            )
+    """)
+        vecs = embed([t for _, _, t in rows], "search_document")
+        before = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]  # type: ignore[reportPrivateImportUsage]
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO chunks (chunk_id, source, text, embedding) VALUES (%s,%s,%s,%s)"
+                "ON CONFLICT (chunk_id) DO NOTHING",
+                [(cid, src, text, v) for (cid, src, text), v in zip(rows, vecs)],
+            )
+        after = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]  # type: ignore[reportPrivateImportUsage]
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS chunks_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS chunks_bm25 ON chunks USING bm25 (chunk_id, text) WITH (key_field='chunk_id')"
+        )
+
+        current_ids = [cid for cid, _, _ in rows]
+        deleted = conn.execute(
+            "DELETE FROM chunks WHERE source = %s AND chunk_id <> ALL(%s)",
+            (path, current_ids),
+        ).rowcount
+        return {
+            "inserted": after - before,
+            "deleted": deleted,
+            "total": after - deleted,
+        }
