@@ -91,6 +91,35 @@ def format_context(hits: list[tuple[str, str]]) -> str:
     )
 
 
+# ---- read-only views of what's in memory (for the GUI's Memory panel) ----
+def list_sources() -> list[tuple[str, int]]:
+    """Every ingested file and how many chunks it holds."""
+    with psycopg.connect(DSN) as conn:
+        return conn.execute(
+            "SELECT source, count(*) FROM chunks GROUP BY source ORDER BY source"
+        ).fetchall()
+
+
+def chunks_for_source(source: str) -> list[tuple[str, str]]:
+    """The indexed chunks (id, text) of one file — the actual retrieval units."""
+    with psycopg.connect(DSN) as conn:
+        return conn.execute(
+            "SELECT chunk_id, text FROM chunks WHERE source = %s ORDER BY chunk_id",
+            (source,),
+        ).fetchall()
+
+
+def sources_for_chunks(cids: list[str]) -> dict[str, str]:
+    """Map cited chunk ids back to their source file, for citation tracing."""
+    if not cids:
+        return {}
+    with psycopg.connect(DSN) as conn:
+        rows = conn.execute(
+            "SELECT chunk_id, source FROM chunks WHERE chunk_id = ANY(%s)", (cids,)
+        ).fetchall()
+    return {cid: src for cid, src in rows}
+
+
 def ingest(path: str) -> dict:
     doc = DocumentConverter().convert(path).document
     chunker = HybridChunker()

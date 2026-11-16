@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 assistant = "assistant:main"
+assistant-gui = "assistant.gui:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
@@ -32,6 +33,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "datasets>=5.1.0",
+    "gradio>=6.31.0",
     "pytest>=9.1.1",
     "ruff>=0.17.2",
 ]
@@ -40,3 +42,7 @@ dev = [
 # experiments/ are prototype/practice scratchpads; lint the production surface
 # (src/ + tests/). Prototypes get cleaned up when promoted into src/.
 extend-exclude = ["experiments"]
+
+[tool.ruff.lint]
+# SIM117: nested `with` is unavoidable in Gradio's layout context managers.
+ignore = ["SIM117"]
