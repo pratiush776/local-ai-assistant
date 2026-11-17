@@ -133,6 +133,17 @@ def sources_for_chunks(cids: list[str]) -> dict[str, str]:
     return {cid: src for cid, src in rows}
 
 
+def texts_for_chunks(cids: list[str]) -> dict[str, str]:
+    """Map chunk ids to their full text — the content the trace sidecar freezes."""
+    if not cids:
+        return {}
+    with psycopg.connect(DSN) as conn:
+        rows = conn.execute(
+            "SELECT chunk_id, text FROM chunks WHERE chunk_id = ANY(%s)", (cids,)
+        ).fetchall()
+    return {cid: text for cid, text in rows}
+
+
 def ingest(path: str) -> dict:
     doc = DocumentConverter().convert(path).document
     chunker = HybridChunker()

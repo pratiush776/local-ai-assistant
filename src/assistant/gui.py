@@ -18,6 +18,7 @@ import psycopg
 
 from . import rag
 from .respond import respond
+from .trace import capture
 
 # real modules (not the shadowed `respond`/`decide` names) for live config writes
 _RESP = sys.modules[f"{__package__}.respond"]
@@ -195,8 +196,9 @@ def chat_fn(payload, display, clean, last_cite, turn_cites):
     ]
 
     route_txt, timings, answer, final = "", {}, "", ""
-    cids, ctexts, flow = [], [], ["**Flow**"]
+    cids, ctexts, flow, events = [], [], ["**Flow**"], []
     for ev in respond(text, clean, force_escalate=force):
+        events.append(ev)
         if ev.kind == "status":
             flow.append(f"- {ev.text}")
             if not answer:
@@ -217,6 +219,7 @@ def chat_fn(payload, display, clean, last_cite, turn_cites):
             display[-1]["content"] = ev.text
         yield cleared, display, clean, last_cite, _flow_md(flow, timings), turn_cites
 
+    capture(text, events)
     display[-1]["content"] = final + _meta(route_txt, timings, bool(cids))
     new_clean = clean + [
         {"role": "user", "content": text},

@@ -65,6 +65,7 @@ def _stream_ollama(messages: list[dict], model: str) -> Iterator[tuple[str, obje
                 yield (
                     "stats",
                     {
+                        "input_tokens": chunk["prompt_eval_count"],
                         "output_tokens": out,
                         "tokens_per_sec": round(out / secs, 1) if secs else None,
                         "ttft_s": round(
@@ -85,7 +86,11 @@ def _stream_claude(
         for text in stream.text_stream:
             yield "delta", text
         final = stream.get_final_message()
-    yield "stats", {"output_tokens": final.usage.output_tokens, "tokens_per_sec": None}
+    yield "stats", {
+        "input_tokens": final.usage.input_tokens,
+        "output_tokens": final.usage.output_tokens,
+        "tokens_per_sec": None,
+    }
 
 
 def _stream(messages, system, model) -> Iterator[tuple[str, object]]:
@@ -150,7 +155,11 @@ def respond(
                 yield Event("delta", text=payload)
         timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
         yield Event("timing", data=timings)
-        yield Event("done", text=answer, data={"label": "ask", "clarifying": True})
+        yield Event(
+            "done",
+            text=answer,
+            data={"label": "ask", "clarifying": True, "model": PRIMARY_LOCAL_MODEL},
+        )
         return
 
     # ---- fact: retrieve + rerank + grounded generation ----
@@ -178,7 +187,7 @@ def respond(
             yield Event(
                 "done",
                 text="I don't have that in your files.",
-                data={"label": "fact", "not_found": True},
+                data={"label": "fact", "not_found": True, "model": PRIMARY_LOCAL_MODEL},
             )
             return
         yield Event(
@@ -208,7 +217,11 @@ def respond(
         )
         timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
         yield Event("timing", data={**timings, **gen_stats})
-        yield Event("done", text=answer, data={"label": "fact", "citations": cites})
+        yield Event(
+            "done",
+            text=answer,
+            data={"label": "fact", "citations": cites, "model": PRIMARY_LOCAL_MODEL},
+        )
         return
 
     # ---- local / escalate: plain generation ----
@@ -228,4 +241,4 @@ def respond(
     timings["generate_ms"] = round((time.perf_counter() - ts) * 1000)
     timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
     yield Event("timing", data={**timings, **gen_stats})
-    yield Event("done", text=answer, data={"label": label or route})
+    yield Event("done", text=answer, data={"label": label or route, "model": model})

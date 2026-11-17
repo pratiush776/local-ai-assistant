@@ -11,6 +11,7 @@ import httpx
 from .context import estimate_tokens, messages_to_text, trim_history
 from .ollama import ask_with_stream
 from .respond import PRIMARY_LOCAL_MODEL, respond
+from .trace import capture
 
 CONTEXT_BUDGET = 4096
 DIM, RESET = "\033[2m", "\033[0m"
@@ -40,9 +41,10 @@ def chat() -> None:
         if not user_msg:
             continue
 
-        answer, started = "", False
+        answer, started, events = "", False, []
         try:
             for ev in respond(user_msg, messages, force_escalate=escalate_next):
+                events.append(ev)
                 if ev.kind in ("status", "route"):
                     _trace(ev.text)
                 elif ev.kind == "delta":
@@ -57,6 +59,7 @@ def chat() -> None:
                     _trace(" ".join(f"{k}={v}" for k, v in ev.data.items()))
                 elif ev.kind == "done":
                     answer = ev.text or answer
+            capture(user_msg, events)
         except (httpx.HTTPError, anthropic.APIError):
             print("\n[network error — nothing stored]")
             escalate_next = False
