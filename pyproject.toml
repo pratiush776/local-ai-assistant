@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 assistant = "assistant:main"
 assistant-gui = "assistant.gui:main"
+assistant-review = "assistant.evals.review:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
