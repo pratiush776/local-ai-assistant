@@ -30,7 +30,7 @@ PRIMARY_LOCAL_MODEL = "qwen3.5:9b"
 ESCALATE_MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = "You are a helpful assistant whose main job is to help users ethically."
 
-EventKind = Literal["status", "route", "delta", "citations", "timing", "done"]
+EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval"]
 
 
 @dataclass
@@ -157,8 +157,20 @@ def respond(
     if label == "fact":
         yield Event("status", "Searching your files…")
         ts = time.perf_counter()
-        hits = rag.rag_search(user_msg)
+        chunks = rag.rag_retrieve(user_msg)
         timings["retrieve_rerank_ms"] = round((time.perf_counter() - ts) * 1000)
+        #-- kept or dropped with its score
+        rows = [
+            {
+                "id": cid,
+                "score": round(float(score),4),
+                "preview":text[:80],
+                "kept": score >= rag.RERANK_THRESHOLD
+            } for cid, text, score in chunks
+        ]
+        kept_n = sum(r["kept"] for r in rows)
+        yield Event(kind="retrieval",text=f"{kept_n}/{len(chunks)} kept", data={"chunks":rows})
+        hits = [(cid,text) for cid,text,score in chunks if score >= rag.RERANK_THRESHOLD]
         if not hits:
             yield Event("status", "Nothing relevant in your files.")
             timings["total_ms"] = round((time.perf_counter() - t0) * 1000)

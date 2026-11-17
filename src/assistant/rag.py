@@ -22,6 +22,11 @@ RRF_K = 60
 # the personal-files eval (#5) calibrates it. See ROADMAP "To review".
 RERANK_THRESHOLD = 0.01
 TOP_K = 10
+# The cross-encoder is OFF by default: it costs ~2.3 GB RAM + a cold ~7 s load on an
+# 18 GB laptop that already swaps. Off -> the hybrid RRF order goes straight to
+# generation. Lesson 5.5 measures whether it earns its memory and may flip this.
+RERANK_ENABLED = False
+PERSONA_TODAY = "2024-05-15"  # the assistant's clock while it runs as the persona
 _RERANKER = None  # module-level cache, starts empty
 RAG_SYSTEM_PROMPT = """Answer using ONLY the numbered context below. Cite the source number [n] with exact text used from the context to create the response
 for reference so that the user can trace it back for every fact respectively.
@@ -42,7 +47,7 @@ def embed(
 
 def hybrid_retrieve(
     question: str, k=TOP_K
-) -> list[tuple[str, str]]:  # (chunk_id, text), #3
+) -> list[tuple[str, str, float]]:  # (chunk_id, text, rrf_score), #3
     # DB search
     SQL = """
 WITH vec AS (
@@ -64,7 +69,7 @@ ORDER BY rrf DESC LIMIT %(k)s;
         rows = conn.execute(
             SQL, {"q": query_vector, "t": question, "rrf_k": RRF_K, "k": k}
         ).fetchall()
-    return [(cid, text) for cid, text, _ in rows]
+    return [(cid, text, float(rrf)) for cid, text, rrf in rows]
 
 
 def _reranker() -> CrossEncoder:
@@ -77,12 +82,20 @@ def _reranker() -> CrossEncoder:
 def warmup_reranker() -> None:
     _reranker()
 
+def rag_retrieve(question: str) -> list[tuple[str, str, float]]:
+    """Every candidate as (chunk_id, text, score), best first.
+    Reranker ON  -> score is the cross-encoder relevance score.
+    Reranker OFF -> score is the hybrid RRF score (order unchanged)."""
+    hits = hybrid_retrieve(question, TOP_K)  # (cid, text, rrf)
+    if not RERANK_ENABLED:
+        return hits
+    scores = _reranker().predict([[question, text] for _, text, _ in hits])
+    reranked = sorted(zip(hits, scores), key=lambda x: x[1], reverse=True)
+    return [(cid, text, float(score)) for (cid, text, _), score in reranked]
 
 def rag_search(question: str) -> list[tuple[str, str]]:
-    relevant_docs = hybrid_retrieve(question, TOP_K)
-    scores = _reranker().predict([[question, text] for _, text in relevant_docs])
-    reranked = sorted(zip(relevant_docs, scores), key=lambda x: x[1], reverse=True)
-    return [(cid, text) for (cid, text), score in reranked if score >= RERANK_THRESHOLD]
+    chunks = rag_retrieve(question)
+    return [(cid, text) for cid, text, score in chunks if score >= RERANK_THRESHOLD]
 
 
 def format_context(hits: list[tuple[str, str]]) -> str:
