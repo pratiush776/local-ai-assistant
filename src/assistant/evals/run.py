@@ -26,9 +26,6 @@ LABELS = Path("data/evals/labels.jsonl")
 OUT_DIR = Path("data/evals")
 BASELINE = Path("data/evals/baseline.json")
 K = 5
-# Guard tolerance: a metric may slip this far below baseline before --check fails,
-# to absorb local-model / judge nondeterminism on n=40 (one row ≈ 2.5%).
-CHECK_TOL = 0.03
 
 
 def load_golden(limit: int | None = None) -> list[dict]:
@@ -188,44 +185,50 @@ def run_golden(rows: list[dict]) -> tuple[list[dict], float]:
     return results, time.perf_counter() - t0
 
 
-def _rates(s: dict) -> dict:
-    """Score counts -> fractions, the shape the baseline stores and --check compares."""
-    return {m: k / n if n else 0.0 for m, (k, n) in
-            {"hit_at_k": s["hit_at_k"], "pass_rate": s["pass_rate"],
-             "refusal": s["refusal"], "citation": s["citation"]}.items()}
+METRICS = ("hit_at_k", "pass_rate", "refusal", "citation")
 
 
 def save_baseline(run_path: str) -> None:
-    """Freeze a run's scores as the regression floor (the decided config: OFF, keep-10)."""
+    """Freeze a run's scores as the regression floor (the decided config: OFF, keep-10).
+    Stores the k/n counts, so --check can derive each metric's Wilson lower bound."""
     d = json.loads(Path(run_path).read_text())
+    s = d["score"]
+    counts = {m: s[m] for m in METRICS}
     base = {"from": Path(run_path).name, "rerank": d.get("rerank"),
-            "rates": _rates(d["score"]), "median_lat_s": d.get("median_lat_s")}
+            "counts": counts, "median_lat_s": d.get("median_lat_s")}
     BASELINE.write_text(json.dumps(base, indent=2))
     print(f"Saved baseline from {base['from']} (rerank {base['rerank']}):")
-    for m, v in base["rates"].items():
-        print(f"  {m:<12} {v:6.1%}")
+    for m, (k, n) in counts.items():
+        p, lo, _ = wilson(k, n)
+        print(f"  {m:<12} {p:6.1%}  Wilson floor {lo:5.1%}  ({k}/{n})")
 
 
 def check_baseline() -> int:
-    """Run the suite at current defaults and fail (exit 1) if any metric drops
-    more than CHECK_TOL below the saved baseline. Local-only regression guard."""
+    """Run the suite at current defaults and fail (exit 1) only if a metric falls
+    BELOW the baseline's 95% Wilson lower bound — i.e. a drop too large to be the
+    local model's run-to-run sampling noise. A point-vs-point compare would flag
+    ordinary noise (a few rows flipping on n=40) as a regression; this doesn't.
+    Local-only guard: CI keeps running pytest + ruff."""
     if not BASELINE.exists():
         print(f"No baseline at {BASELINE}. Run: uv run evals --save-baseline <run.json>")
         return 1
     base = json.loads(BASELINE.read_text())
-    results, _ = run_golden(load_golden())
-    now = _rates(score(results))
-    print("\n" + "=" * 58)
-    print("REGRESSION CHECK   (now vs baseline, tol " f"{CHECK_TOL:.0%})")
-    print("=" * 58)
+    s = score(run_golden(load_golden())[0])
+    print("\n" + "=" * 64)
+    print("REGRESSION CHECK   (now vs baseline's 95% Wilson floor)")
+    print("=" * 64)
     failed = False
-    for m, b in base["rates"].items():
-        n = now[m]
-        bad = n < b - CHECK_TOL
+    for m, (bk, bn) in base["counts"].items():
+        bp, lo, _ = wilson(bk, bn)
+        nk, nn = s[m]
+        now = nk / nn if nn else 0.0
+        bad = now < lo
         failed = failed or bad
-        print(f"  {m:<12} now {n:6.1%}  base {b:6.1%}  {'FAIL' if bad else 'ok'}")
-    print("=" * 58)
-    print("REGRESSION" if failed else "OK — no score below baseline")
+        print(f"  {m:<12} now {now:6.1%}  base {bp:6.1%}  floor {lo:6.1%}  "
+              f"{'FAIL' if bad else 'ok'}")
+    print("=" * 64)
+    print("REGRESSION — a score fell below the baseline's noise floor"
+          if failed else "OK — every score within the baseline's noise band")
     return 1 if failed else 0
 
 
