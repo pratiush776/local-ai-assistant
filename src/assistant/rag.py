@@ -21,6 +21,10 @@ RRF_K = 60
 # keep this low and let grounded generation refuse near-miss noise. Provisional until
 # the personal-files eval (#5) calibrates it. See ROADMAP "To review".
 RERANK_THRESHOLD = 0.01
+# KEEP_N: when set, keep the top-N chunks by rank and ignore RERANK_THRESHOLD.
+# None -> the old score-threshold behaviour. A fixed cut is kept-set-size-invariant,
+# so it isolates the reranker (5.5) and sidesteps the uncalibrated threshold.
+KEEP_N: int | None = None
 TOP_K = 10
 # The cross-encoder is OFF by default: it costs ~2.3 GB RAM + a cold ~7 s load on an
 # 18 GB laptop that already swaps. Off -> the hybrid RRF order goes straight to
@@ -94,7 +98,9 @@ def rag_retrieve(question: str) -> list[tuple[str, str, float]]:
     return [(cid, text, float(score)) for (cid, text, _), score in reranked]
 
 def rag_search(question: str) -> list[tuple[str, str]]:
-    chunks = rag_retrieve(question)
+    chunks = rag_retrieve(question)  # best-first
+    if KEEP_N is not None:
+        return [(cid, text) for cid, text, _ in chunks[:KEEP_N]]
     return [(cid, text) for cid, text, score in chunks if score >= RERANK_THRESHOLD]
 
 

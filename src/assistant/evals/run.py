@@ -9,6 +9,7 @@ Two measurements, kept apart on purpose (see run_row):
                        session) the judge's answer pass rate.
 """
 import json
+import statistics
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,12 +19,16 @@ from ..respond import respond
 from ..trace import record_turn
 from . import checks
 from .judge import HAIKU_JUDGE, LOCAL_JUDGE, agreement, judge_one
-from .stats import wilson
+from .stats import mcnemar, wilson
 
 GOLDEN = Path("data/assets/evals/golden.jsonl")
 LABELS = Path("data/evals/labels.jsonl")
 OUT_DIR = Path("data/evals")
+BASELINE = Path("data/evals/baseline.json")
 K = 5
+# Guard tolerance: a metric may slip this far below baseline before --check fails,
+# to absorb local-model / judge nondeterminism on n=40 (one row ≈ 2.5%).
+CHECK_TOL = 0.03
 
 
 def load_golden(limit: int | None = None) -> list[dict]:
@@ -42,8 +47,10 @@ def run_row(row: dict) -> dict:
     id2src = rag.sources_for_chunks(cids)
     ret_sources = [id2src.get(cid, "") for cid in cids]
 
-    # (2) the real system answer, through respond()
+    # (2) the real system answer, through respond() — time just this, the real turn
+    t0 = time.perf_counter()
     rec = record_turn(q, list(respond(q, [])))
+    latency_s = time.perf_counter() - t0
 
     return {
         "id": row["id"],
@@ -52,6 +59,7 @@ def run_row(row: dict) -> dict:
         "expected_answer": row["expected_answer"],
         "expected_sources": row["source_files"],
         "retrieved_sources": ret_sources,
+        "latency_s": round(latency_s, 2),
         "answer": rec["answer"],
         "route": rec["route"],
         "label": rec["label"],  # fact/chat/... — this, not route, says if it retrieved
@@ -163,22 +171,8 @@ def validate_judge(model: str = LOCAL_JUDGE) -> None:
             print(f"  {rid}: you={me} judge={jv}  — {why[:80]}")
 
 
-def main() -> None:
-    import sys
-
-    if "--label" in sys.argv:
-        label_rows()
-        return
-    if "--validate-judge" in sys.argv:
-        model = HAIKU_JUDGE if "--haiku" in sys.argv else LOCAL_JUDGE
-        validate_judge(model)
-        return
-
-    limit = None
-    if "--limit" in sys.argv:
-        limit = int(sys.argv[sys.argv.index("--limit") + 1])
-    rows = load_golden(limit)
-
+def run_golden(rows: list[dict]) -> tuple[list[dict], float]:
+    """Run every golden row through the system + local judge. Returns (results, seconds)."""
     print(f"Running {len(rows)} golden rows through the assistant…")
     results, t0 = [], time.perf_counter()
     for i, row in enumerate(rows, 1):
@@ -191,21 +185,140 @@ def main() -> None:
             f"judge={v:4} {row['question'][:40]}",
             flush=True,
         )
-    dur = time.perf_counter() - t0
+    return results, time.perf_counter() - t0
+
+
+def _rates(s: dict) -> dict:
+    """Score counts -> fractions, the shape the baseline stores and --check compares."""
+    return {m: k / n if n else 0.0 for m, (k, n) in
+            {"hit_at_k": s["hit_at_k"], "pass_rate": s["pass_rate"],
+             "refusal": s["refusal"], "citation": s["citation"]}.items()}
+
+
+def save_baseline(run_path: str) -> None:
+    """Freeze a run's scores as the regression floor (the decided config: OFF, keep-10)."""
+    d = json.loads(Path(run_path).read_text())
+    base = {"from": Path(run_path).name, "rerank": d.get("rerank"),
+            "rates": _rates(d["score"]), "median_lat_s": d.get("median_lat_s")}
+    BASELINE.write_text(json.dumps(base, indent=2))
+    print(f"Saved baseline from {base['from']} (rerank {base['rerank']}):")
+    for m, v in base["rates"].items():
+        print(f"  {m:<12} {v:6.1%}")
+
+
+def check_baseline() -> int:
+    """Run the suite at current defaults and fail (exit 1) if any metric drops
+    more than CHECK_TOL below the saved baseline. Local-only regression guard."""
+    if not BASELINE.exists():
+        print(f"No baseline at {BASELINE}. Run: uv run evals --save-baseline <run.json>")
+        return 1
+    base = json.loads(BASELINE.read_text())
+    results, _ = run_golden(load_golden())
+    now = _rates(score(results))
+    print("\n" + "=" * 58)
+    print("REGRESSION CHECK   (now vs baseline, tol " f"{CHECK_TOL:.0%})")
+    print("=" * 58)
+    failed = False
+    for m, b in base["rates"].items():
+        n = now[m]
+        bad = n < b - CHECK_TOL
+        failed = failed or bad
+        print(f"  {m:<12} now {n:6.1%}  base {b:6.1%}  {'FAIL' if bad else 'ok'}")
+    print("=" * 58)
+    print("REGRESSION" if failed else "OK — no score below baseline")
+    return 1 if failed else 0
+
+
+def compare_runs(path_a: str, path_b: str) -> None:
+    """Pair two saved runs by row id, McNemar on PASS/FAIL, median latency each.
+    A = first file, B = second. A 'win' is PASS (judge == 'PASS')."""
+    a = json.loads(Path(path_a).read_text())
+    b = json.loads(Path(path_b).read_text())
+    rows_a = {r["id"]: r for r in a["results"]}
+    rows_b = {r["id"]: r for r in b["results"]}
+    ids = [i for i in rows_a if i in rows_b]  # same 40, paired by id
+
+    pa = [rows_a[i].get("judge") == "PASS" for i in ids]
+    pb = [rows_b[i].get("judge") == "PASS" for i in ids]
+    a_only, b_only_wrong, chi = mcnemar(pa, pb)  # a_only: A pass & B fail; b: A fail & B pass
+
+    lat_a = statistics.median(rows_a[i].get("latency_s", 0) for i in ids)
+    lat_b = statistics.median(rows_b[i].get("latency_s", 0) for i in ids)
+    tag_a, tag_b = a.get("rerank", "A"), b.get("rerank", "B")
+
+    print("\n" + "=" * 58)
+    print(f"COMPARE  A={tag_a} ({Path(path_a).name})  vs  B={tag_b} ({Path(path_b).name})")
+    print("=" * 58)
+    print(f"  pass rate   A {sum(pa):2}/{len(ids)}   B {sum(pb):2}/{len(ids)}")
+    print(f"  flips       A-only-right {a_only}   B-only-right {b_only_wrong}")
+    print(f"  McNemar     chi^2(cc) = {chi:.2f}   (>3.84 = significant at .05)")
+    print(f"  median lat  A {lat_a:5.1f}s   B {lat_b:5.1f}s   (B-A = {lat_b - lat_a:+.1f}s)")
+    print("=" * 58)
+    disagree = [i for i in ids if pa[ids.index(i)] != pb[ids.index(i)]]
+    if disagree:
+        print("Rows that flipped:")
+        for i in disagree:
+            wa = "PASS" if rows_a[i].get("judge") == "PASS" else "FAIL"
+            wb = "PASS" if rows_b[i].get("judge") == "PASS" else "FAIL"
+            print(f"  {i}: A={wa} B={wb}  {rows_a[i]['question'][:45]}")
+
+
+def main() -> None:
+    import sys
+
+    if "--label" in sys.argv:
+        label_rows()
+        return
+    if "--validate-judge" in sys.argv:
+        model = HAIKU_JUDGE if "--haiku" in sys.argv else LOCAL_JUDGE
+        validate_judge(model)
+        return
+    if "--compare" in sys.argv:
+        i = sys.argv.index("--compare")
+        compare_runs(sys.argv[i + 1], sys.argv[i + 2])
+        return
+    if "--save-baseline" in sys.argv:
+        save_baseline(sys.argv[sys.argv.index("--save-baseline") + 1])
+        return
+    if "--check" in sys.argv:
+        sys.exit(check_baseline())
+
+    # experiment knobs: force the reranker on/off and cap the kept-set (default = rag.py)
+    if "--rerank" in sys.argv:
+        mode = sys.argv[sys.argv.index("--rerank") + 1]
+        rag.RERANK_ENABLED = mode == "on"
+        if rag.RERANK_ENABLED:
+            rag.warmup_reranker()  # load the model now, off the per-turn clock
+    if "--keep-n" in sys.argv:
+        rag.KEEP_N = int(sys.argv[sys.argv.index("--keep-n") + 1])
+    rerank_tag = "on" if rag.RERANK_ENABLED else "off"
+    if rag.KEEP_N is not None:
+        rerank_tag += f"-k{rag.KEEP_N}"
+
+    limit = None
+    if "--limit" in sys.argv:
+        limit = int(sys.argv[sys.argv.index("--limit") + 1])
+    rows = load_golden(limit)
+
+    results, dur = run_golden(rows)
 
     s = score(results)
+    median_lat = statistics.median(r["latency_s"] for r in results)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = OUT_DIR / f"run-{stamp}.json"
+    out = OUT_DIR / f"run-{rerank_tag}-{stamp}.json"
     out.write_text(
         json.dumps(
-            {"ts": stamp, "dur_s": round(dur, 1), "score": s, "results": results},
+            {"ts": stamp, "dur_s": round(dur, 1), "rerank": rerank_tag,
+             "median_lat_s": round(median_lat, 2), "score": s, "results": results},
             indent=2,
         )
     )
     print_scoreboard(s)
+    print(f"  {'median turn latency':<20} {median_lat:5.1f}s   (rerank {rerank_tag})")
+    print("=" * 58)
     print(f"\nSaved {out}  ({dur:.0f}s)")
-    if LABELS.exists() and not limit:
+    if LABELS.exists() and not limit and "--rerank" not in sys.argv:
         validate_judge(LOCAL_JUDGE)  # judge agreement, against my hand labels
 
 

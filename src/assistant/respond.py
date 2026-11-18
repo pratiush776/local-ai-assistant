@@ -168,18 +168,22 @@ def respond(
         ts = time.perf_counter()
         chunks = rag.rag_retrieve(user_msg)
         timings["retrieve_rerank_ms"] = round((time.perf_counter() - ts) * 1000)
-        #-- kept or dropped with its score
+        #-- kept or dropped: fixed top-N by rank when KEEP_N set, else the score threshold
+        def _kept(rank: int, score: float) -> bool:
+            if rag.KEEP_N is not None:
+                return rank < rag.KEEP_N
+            return score >= rag.RERANK_THRESHOLD
         rows = [
             {
                 "id": cid,
                 "score": round(float(score),4),
                 "preview":text[:80],
-                "kept": score >= rag.RERANK_THRESHOLD
-            } for cid, text, score in chunks
+                "kept": _kept(i, score)
+            } for i, (cid, text, score) in enumerate(chunks)
         ]
         kept_n = sum(r["kept"] for r in rows)
         yield Event(kind="retrieval",text=f"{kept_n}/{len(chunks)} kept", data={"chunks":rows})
-        hits = [(cid,text) for cid,text,score in chunks if score >= rag.RERANK_THRESHOLD]
+        hits = [(cid,text) for i,(cid,text,score) in enumerate(chunks) if _kept(i,score)]
         if not hits:
             yield Event("status", "Nothing relevant in your files.")
             timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
