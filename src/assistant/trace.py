@@ -20,6 +20,7 @@ def record_turn(user_msg: str, events:list[Event]) -> dict:
         "route": None, "label": None, "model":None,
         "retrieved": [], "kept":[],
         "answer":"", "not_found": False, "citations":[],
+        "steps":[],  # agent tool calls/results, in order
         "timings_ms":{},"tokens":{}
     }
 
@@ -33,6 +34,12 @@ def record_turn(user_msg: str, events:list[Event]) -> dict:
             rec["kept"] = [c["id"] for c in ev.data["chunks"] if c["kept"]]
         elif ev.kind == "citations":
             rec["citations"] = ev.data["ids"]
+        elif ev.kind == "tool_call":
+            rec["steps"].append({"type": "call", "tool": ev.text,
+                                 "args": ev.data.get("args", {})})
+        elif ev.kind == "tool_result":
+            rec["steps"].append({"type": "result", "tool": ev.text,
+                                 "result": ev.data.get("result", "")})
         elif ev.kind == "timing":
             for key,val in ev.data.items():
                 bucket = "timings_ms" if key.endswith("_ms") else "tokens"

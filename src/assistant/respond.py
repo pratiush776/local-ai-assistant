@@ -30,7 +30,7 @@ PRIMARY_LOCAL_MODEL = "qwen3.5:9b"
 ESCALATE_MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = "You are a helpful assistant whose main job is to help users ethically."
 
-EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval"]
+EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval", "tool_call", "tool_result"]
 
 
 @dataclass
@@ -226,6 +226,22 @@ def respond(
             text=answer,
             data={"label": "fact", "citations": cites, "model": PRIMARY_LOCAL_MODEL},
         )
+        return
+
+    # ---- action: hand off to the agent loop (tools + approval) ----
+    if label == "action":
+        from assistant import agent, tools  # local import avoids a circular import
+        yield Event("status", "Working on it…")
+        answer = ""
+        for ev in agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS):
+            if ev.kind == "done":
+                answer = ev.text  # capture, but don't emit a second terminal done
+            else:
+                yield ev  # forward tool_call / tool_result for Flow + trace
+        timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
+        yield Event("timing", data=timings)
+        yield Event("done", text=answer,
+                    data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
         return
 
     # ---- local / escalate: plain generation ----

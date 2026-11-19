@@ -210,6 +210,11 @@ def chat_fn(payload, display, clean, last_cite, turn_cites):
             answer += ev.text
             final = answer
             display[-1]["content"] = answer
+        elif ev.kind == "tool_call":
+            flow.append(f"**→ {ev.text}**(`{ev.data.get('args', {})}`)")
+        elif ev.kind == "tool_result":
+            res = str(ev.data.get("result", "")).replace("\n", " ")[:80]
+            flow.append(f"&nbsp;&nbsp;↳ {res}")
         elif ev.kind == "citations":
             cids, ctexts = ev.data["ids"], ev.data.get("texts", [])
         elif ev.kind == "timing":
