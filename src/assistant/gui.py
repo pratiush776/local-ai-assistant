@@ -17,7 +17,7 @@ import httpx
 import psycopg
 
 from . import rag
-from .respond import respond
+from .respond import respond, respond_resume
 from .trace import capture
 
 # real modules (not the shadowed `respond`/`decide` names) for live config writes
@@ -168,12 +168,86 @@ def _flow_md(lines: list[str], timings: dict) -> str:
     return md
 
 
-def chat_fn(payload, display, clean, last_cite, turn_cites):
+_BLANK = {"text": "", "files": []}
+
+
+def _apply_event(ev, ctx: dict) -> None:
+    """Fold one event into the render context (mutates ctx)."""
+    if ev.kind == "status":
+        ctx["flow"].append(f"- {ev.text}")
+        if not ctx["answer"]:
+            ctx["display"][-1]["content"] = f"<sub>· {ev.text}</sub>"
+    elif ev.kind == "route":
+        ctx["route_txt"] = ev.data["label"] or ev.data["route"]
+        ctx["flow"].append(
+            f"**Route:** `{ctx['route_txt']}` · conf {ev.data['confidence']:.2f}")
+    elif ev.kind == "delta":
+        ctx["answer"] += ev.text
+        ctx["final"] = ctx["answer"]
+        ctx["display"][-1]["content"] = ctx["answer"]
+    elif ev.kind == "tool_call":
+        ctx["flow"].append(f"**→ {ev.text}**(`{ev.data.get('args', {})}`)")
+    elif ev.kind == "tool_result":
+        res = str(ev.data.get("result", "")).replace("\n", " ")[:80]
+        ctx["flow"].append(f"&nbsp;&nbsp;↳ {res}")
+    elif ev.kind == "citations":
+        ctx["cids"], ctx["ctexts"] = ev.data["ids"], ev.data.get("texts", [])
+    elif ev.kind == "timing":
+        ctx["timings"] = ev.data
+    elif ev.kind == "done" and not ctx["answer"]:
+        ctx["final"] = ev.text
+        ctx["display"][-1]["content"] = ev.text
+
+
+def _frame(ctx: dict, clean, turn_cites, *, ask=False, pending=None):
+    """One GUI output tuple. `ask` toggles the Approve/Deny buttons."""
+    return (_BLANK, ctx["display"], clean, ctx["last_cite"],
+            _flow_md(ctx["flow"], ctx["timings"]), turn_cites,
+            gr.update(visible=ask), gr.update(visible=ask), pending)
+
+
+def _stream_frames(stream, ctx, clean, turn_cites):
+    """Yield a frame per event. Returns the approval_request Event if paused, else None."""
+    for ev in stream:
+        ctx["events"].append(ev)
+        if ev.kind == "approval_request":
+            return ev
+        _apply_event(ev, ctx)
+        yield _frame(ctx, clean, turn_cites)
+    return None
+
+
+def _ask_frame(ctx, pause, clean, turn_cites):
+    """Pause the turn: show the exact pending write and reveal the buttons."""
+    ctx["flow"].append(f"**⏸ approve** `{pause.text}`(`{pause.data.get('args', {})}`)**?**")
+    pending = {"state": pause.data["state"], "name": pause.text,
+               "args": pause.data["args"], "ctx": ctx,
+               "clean": clean, "turn_cites": turn_cites}
+    return _frame(ctx, clean, turn_cites, ask=True, pending=pending)
+
+
+def _finish(ctx, clean, turn_cites):
+    """Persist the trace and emit the final, buttons-hidden frame."""
+    capture(ctx["text"], ctx["events"])
+    display = ctx["display"]
+    display[-1]["content"] = ctx["final"] + _meta(
+        ctx["route_txt"], ctx["timings"], bool(ctx["cids"]))
+    new_clean = clean + [
+        {"role": "user", "content": ctx["text"]},
+        {"role": "assistant", "content": ctx["final"]},
+    ]
+    new_cite = {"ids": ctx["cids"], "texts": ctx["ctexts"]}
+    new_turn_cites = {**turn_cites, len(display) - 1: new_cite}
+    yield (_BLANK, display, new_clean, new_cite,
+           _flow_md(ctx["flow"], ctx["timings"]), new_turn_cites,
+           gr.update(visible=False), gr.update(visible=False), None)
+
+
+def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
     text = ((payload or {}).get("text") or "").strip()
     files = (payload or {}).get("files") or []
     notes = _remember(files) if files else []
-    cleared = {"text": "", "files": []}
-    empty = {"ids": [], "texts": []}
+    hide = gr.update(visible=False)
 
     low = text.lower()
     force = False
@@ -185,7 +259,8 @@ def chat_fn(payload, display, clean, last_cite, turn_cites):
     if not text:  # files only
         if notes:
             display = display + [{"role": "assistant", "content": "\n".join(notes)}]
-        yield cleared, display, clean, empty, gr.update(), turn_cites
+        yield (_BLANK, display, clean, {"ids": [], "texts": []}, gr.update(),
+               turn_cites, hide, hide, None)
         return
 
     if notes:
@@ -195,44 +270,39 @@ def chat_fn(payload, display, clean, last_cite, turn_cites):
         {"role": "assistant", "content": "<sub>· thinking…</sub>"},
     ]
 
-    route_txt, timings, answer, final = "", {}, "", ""
-    cids, ctexts, flow, events = [], [], ["**Flow**"], []
-    for ev in respond(text, clean, force_escalate=force):
-        events.append(ev)
-        if ev.kind == "status":
-            flow.append(f"- {ev.text}")
-            if not answer:
-                display[-1]["content"] = f"<sub>· {ev.text}</sub>"
-        elif ev.kind == "route":
-            route_txt = ev.data["label"] or ev.data["route"]
-            flow.append(f"**Route:** `{route_txt}` · conf {ev.data['confidence']:.2f}")
-        elif ev.kind == "delta":
-            answer += ev.text
-            final = answer
-            display[-1]["content"] = answer
-        elif ev.kind == "tool_call":
-            flow.append(f"**→ {ev.text}**(`{ev.data.get('args', {})}`)")
-        elif ev.kind == "tool_result":
-            res = str(ev.data.get("result", "")).replace("\n", " ")[:80]
-            flow.append(f"&nbsp;&nbsp;↳ {res}")
-        elif ev.kind == "citations":
-            cids, ctexts = ev.data["ids"], ev.data.get("texts", [])
-        elif ev.kind == "timing":
-            timings = ev.data
-        elif ev.kind == "done" and not answer:
-            final = ev.text
-            display[-1]["content"] = ev.text
-        yield cleared, display, clean, last_cite, _flow_md(flow, timings), turn_cites
+    ctx = {"display": display, "flow": ["**Flow**"], "answer": "", "final": "",
+           "route_txt": "", "timings": {}, "cids": [], "ctexts": [],
+           "events": [], "last_cite": last_cite, "text": text}
 
-    capture(text, events)
-    display[-1]["content"] = final + _meta(route_txt, timings, bool(cids))
-    new_clean = clean + [
-        {"role": "user", "content": text},
-        {"role": "assistant", "content": final},
-    ]
-    new_cite = {"ids": cids, "texts": ctexts}
-    new_turn_cites = {**turn_cites, len(display) - 1: new_cite}
-    yield cleared, display, new_clean, new_cite, _flow_md(flow, timings), new_turn_cites
+    pause = yield from _stream_frames(
+        respond(text, clean, force_escalate=force), ctx, clean, turn_cites)
+    if pause is not None:  # a write is waiting — reveal Approve/Deny and stop
+        yield _ask_frame(ctx, pause, clean, turn_cites)
+        return
+    yield from _finish(ctx, clean, turn_cites)
+
+
+def resume_fn(approved: bool, pending):
+    """Continue a paused action turn after the human clicked Approve/Deny."""
+    if not pending:
+        return
+    ctx = pending["ctx"]
+    stream = respond_resume(pending["state"], pending["name"],
+                            pending["args"], approved)
+    pause = yield from _stream_frames(
+        stream, ctx, pending["clean"], pending["turn_cites"])
+    if pause is not None:  # another write — ask again
+        yield _ask_frame(ctx, pause, pending["clean"], pending["turn_cites"])
+        return
+    yield from _finish(ctx, pending["clean"], pending["turn_cites"])
+
+
+def approve_click(pending):
+    yield from resume_fn(True, pending)
+
+
+def deny_click(pending):
+    yield from resume_fn(False, pending)
 
 
 def clear_all():
@@ -246,6 +316,9 @@ def clear_all():
         nav,
         "*Send a message to see the routing flow.*",
         {},
+        gr.update(visible=False),  # approve_btn
+        gr.update(visible=False),  # deny_btn
+        None,                      # pending_state
         *_render(nav, empty),
     )
 
@@ -288,6 +361,7 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     cite_state = gr.State({"ids": [], "texts": []})
     nav_state = gr.State([("files", None)])
     turn_cites_state = gr.State({})
+    pending_state = gr.State(None)  # a paused action turn awaiting Approve/Deny
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=3):
@@ -303,6 +377,11 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                 file_types=[".pdf", ".md", ".txt"],
                 submit_btn=True,
             )
+            with gr.Row(elem_id="approvalbar"):
+                approve_btn = gr.Button("✓ Approve", variant="primary",
+                                        visible=False, scale=1)
+                deny_btn = gr.Button("✗ Deny", variant="stop",
+                                     visible=False, scale=1)
         with gr.Column(scale=2, min_width=320, elem_id="rail"):
             with gr.Tabs() as rail_tabs:
                 with gr.Tab("Memory", id="memory"):
@@ -376,12 +455,16 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     apply_status = gr.Markdown("")
 
     render_out = [rail_title, back_btn, selector, content]
+    chat_out = [msg, chatbot, clean_state, cite_state, flow_md, turn_cites_state,
+                approve_btn, deny_btn, pending_state]
     sub = msg.submit(
         chat_fn,
-        [msg, chatbot, clean_state, cite_state, turn_cites_state],
-        [msg, chatbot, clean_state, cite_state, flow_md, turn_cites_state],
+        [msg, chatbot, clean_state, cite_state, turn_cites_state, pending_state],
+        chat_out,
     )
     sub.then(_render, [nav_state, cite_state], render_out)
+    approve_btn.click(approve_click, [pending_state], chat_out)
+    deny_btn.click(deny_click, [pending_state], chat_out)
 
     chatbot.select(
         open_sources,
@@ -401,6 +484,9 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
             nav_state,
             flow_md,
             turn_cites_state,
+            approve_btn,
+            deny_btn,
+            pending_state,
             *render_out,
         ],
     )
