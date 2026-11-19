@@ -48,7 +48,7 @@ def init_db() -> None:
                 done INTEGER DEFAULT 0);
         """)
         already = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        if not already:
+        if not already and CALENDAR_SEED.exists():  # skip seeding if assets absent (e.g. CI)
             seed = json.loads(CALENDAR_SEED.read_text())
             conn.executemany(
                 "INSERT INTO events (id,title,start,end,location) VALUES (?,?,?,?,?)",
@@ -142,9 +142,22 @@ _BODIES = {
 }
 
 
+_db_ready = False
+
+
+def _ensure_db() -> None:
+    """Set up + seed the DB on first tool use (not at import, so importing this
+    module stays side-effect-free — e.g. under pytest with no persona assets)."""
+    global _db_ready
+    if not _db_ready:
+        init_db()
+        _db_ready = True
+
+
 def run_tool(name: str, args: dict) -> str:
     if name not in _BODIES:
         raise ValueError(f"No such tool: {name}")
+    _ensure_db()
     return _BODIES[name](args)
 
 
@@ -249,6 +262,4 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
 ]
-
-
-init_db()
+# NB: no init_db() at import — it runs lazily via _ensure_db() on first tool use.
