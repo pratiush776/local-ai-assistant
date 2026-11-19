@@ -303,6 +303,16 @@ def compare_runs(path_a: str, path_b: str) -> None:
 def main() -> None:
     import sys
 
+    if "--agent" in sys.argv:
+        from . import agent_eval
+
+        lim = (
+            int(sys.argv[sys.argv.index("--limit") + 1])
+            if "--limit" in sys.argv
+            else None
+        )
+        agent_eval.run(lim)
+        return
     if "--label" in sys.argv:
         label_rows()
         return

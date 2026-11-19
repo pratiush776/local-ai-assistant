@@ -36,28 +36,51 @@ def _db() -> sqlite3.Connection:
     return conn
 
 
+EVENT_COLS = "id,title,start,end,location,participants,description"
+
+
+def _event_rows(seed: dict) -> list[tuple]:
+    """Map persona calendar JSON -> event table rows. One source of the column order,
+    shared by init-seed and the eval's reset_db (participants list -> comma string)."""
+    return [
+        (
+            e["id"],
+            e["title"],
+            e["start"],
+            e["end"],
+            e.get("location", ""),
+            ", ".join(e.get("participants", [])),
+            e.get("description", ""),
+        )
+        for e in seed["events"]
+    ]
+
+
 def init_db() -> None:
     """Create tables and seed events from the persona calendar (idempotent)."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY, title TEXT, start TEXT, end TEXT, location TEXT);
+                id TEXT PRIMARY KEY, title TEXT, start TEXT, end TEXT, location TEXT,
+                participants TEXT, description TEXT);
             CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, date TEXT,
                 done INTEGER DEFAULT 0);
         """)
+        # migrate an events table created before participants/description existed
+        have = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+        for col in ("participants", "description"):
+            if col not in have:
+                conn.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
         already = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         if (
             not already and CALENDAR_SEED.exists()
         ):  # skip seeding if assets absent (e.g. CI)
             seed = json.loads(CALENDAR_SEED.read_text())
             conn.executemany(
-                "INSERT INTO events (id,title,start,end,location) VALUES (?,?,?,?,?)",
-                [
-                    (e["id"], e["title"], e["start"], e["end"], e.get("location", ""))
-                    for e in seed["events"]
-                ],
+                f"INSERT INTO events ({EVENT_COLS}) VALUES (?,?,?,?,?,?,?)",
+                _event_rows(seed),
             )
 
 
@@ -85,14 +108,40 @@ def _read_file(filename: str) -> str:
 def _list_events(date: str) -> str:
     with _db() as conn:
         rows = conn.execute(
-            "SELECT title,start,end,location FROM events "
+            "SELECT title,start,end,location,participants,description FROM events "
             "WHERE start LIKE ? ORDER BY start",
             (f"{date}%",),
         ).fetchall()
     if not rows:
         return f"No events on {date}."
+    out = []
+    for r in rows:
+        line = f"{r['start'][11:]}–{r['end'][11:]}  {r['title']}"
+        if r["location"]:
+            line += f" @ {r['location']}"
+        if r["participants"]:
+            line += f"\n    with: {r['participants']}"
+        if r["description"]:
+            line += f"\n    note: {r['description']}"
+        out.append(line)
+    return "\n".join(out)
+
+
+def _find_event(title: str) -> str:
+    """Search events by title/keyword across ALL dates (list_events only sees one day).
+    Lets the agent locate an event it was given by name, e.g. 'the dentist appointment',
+    without first knowing its date — then it has the date for a follow-up action."""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT title,start,end,location FROM events "
+            "WHERE title LIKE ? ORDER BY start",
+            (f"%{title}%",),
+        ).fetchall()
+    if not rows:
+        return f"No event matching '{title}'."
+    # spans dates, so each line shows the DATE (unlike list_events' time-only lines)
     return "\n".join(
-        f"{r['start'][11:]}–{r['end'][11:]}  {r['title']}"
+        f"{r['start'][:10]} {r['start'][11:]}–{r['end'][11:]}  {r['title']}"
         f"{' @ ' + r['location'] if r['location'] else ''}"
         for r in rows
     )
@@ -136,6 +185,7 @@ _BODIES = {
     "search_files": lambda a: _search_files(a["query"]),
     "read_file": lambda a: _read_file(a["filename"]),
     "list_events": lambda a: _list_events(a["date"]),
+    "find_event": lambda a: _find_event(a["title"]),
     "add_event": lambda a: _add_event(
         a["title"], a["date"], a.get("time", "09:00"), a.get("duration_min", 60)
     ),
@@ -213,6 +263,24 @@ TOOL_SCHEMAS: list[dict] = [
                     "date": _s("The date in 'YYYY-MM-DD' to list events for.")
                 },
                 "required": ["date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_event",
+            "description": "Find calendar events by title or keyword across ALL dates. "
+            "Use when the user names an event without giving its date (e.g. 'my dentist "
+            "appointment', 'the networking event') and you need to know when it is.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": _s(
+                        "A word or phrase from the event's title to search for."
+                    )
+                },
+                "required": ["title"],
             },
         },
     },
