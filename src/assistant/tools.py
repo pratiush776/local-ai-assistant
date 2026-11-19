@@ -48,7 +48,9 @@ def init_db() -> None:
                 done INTEGER DEFAULT 0);
         """)
         already = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        if not already and CALENDAR_SEED.exists():  # skip seeding if assets absent (e.g. CI)
+        if (
+            not already and CALENDAR_SEED.exists()
+        ):  # skip seeding if assets absent (e.g. CI)
             seed = json.loads(CALENDAR_SEED.read_text())
             conn.executemany(
                 "INSERT INTO events (id,title,start,end,location) VALUES (?,?,?,?,?)",
