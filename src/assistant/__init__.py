@@ -10,7 +10,7 @@ import httpx
 
 from .context import estimate_tokens, messages_to_text, trim_history
 from .ollama import ask_with_stream
-from .respond import PRIMARY_LOCAL_MODEL, respond
+from .respond import PRIMARY_LOCAL_MODEL, respond, respond_resume
 from .trace import capture
 
 CONTEXT_BUDGET = 4096
@@ -19,6 +19,34 @@ DIM, RESET = "\033[2m", "\033[0m"
 
 def _trace(text: str) -> None:
     print(f"{DIM}· {text}{RESET}")
+
+
+def _consume(stream, events: list, state: dict):
+    """Print an event stream. Returns the approval_request Event if the run paused
+    for a write, else None. Accumulates the final answer into state['answer']."""
+    for ev in stream:
+        events.append(ev)
+        if ev.kind in ("status", "route"):
+            _trace(ev.text)
+        elif ev.kind == "tool_call":
+            _trace(f"→ {ev.text}({ev.data.get('args', {})})")
+        elif ev.kind == "tool_result":
+            _trace(f"  ↳ {str(ev.data.get('result', '')).splitlines()[0][:70]}")
+        elif ev.kind == "delta":
+            if not state["started"]:
+                print("assistant › ", end="", flush=True)
+                state["started"] = True
+            print(ev.text, end="", flush=True)
+            state["answer"] += ev.text
+        elif ev.kind == "citations":
+            print(f"\n{DIM}{ev.text}{RESET}", end="")
+        elif ev.kind == "timing":
+            _trace(" ".join(f"{k}={v}" for k, v in ev.data.items()))
+        elif ev.kind == "approval_request":
+            return ev
+        elif ev.kind == "done":
+            state["answer"] = ev.text or state["answer"]
+    return None
 
 
 def prewarm(model: str = PRIMARY_LOCAL_MODEL) -> None:
@@ -41,29 +69,27 @@ def chat() -> None:
         if not user_msg:
             continue
 
-        answer, started, events = "", False, []
+        state, events = {"answer": "", "started": False}, []
         try:
-            for ev in respond(user_msg, messages, force_escalate=escalate_next):
-                events.append(ev)
-                if ev.kind in ("status", "route"):
-                    _trace(ev.text)
-                elif ev.kind == "delta":
-                    if not started:
-                        print("assistant › ", end="", flush=True)
-                        started = True
-                    print(ev.text, end="", flush=True)
-                    answer += ev.text
-                elif ev.kind == "citations":
-                    print(f"\n{DIM}{ev.text}{RESET}", end="")
-                elif ev.kind == "timing":
-                    _trace(" ".join(f"{k}={v}" for k, v in ev.data.items()))
-                elif ev.kind == "done":
-                    answer = ev.text or answer
+            pause = _consume(
+                respond(user_msg, messages, force_escalate=escalate_next),
+                events, state)
+            while pause is not None:  # a write is waiting — ask, then resume
+                ok = input(
+                    f"\n{DIM}approve {pause.text}({pause.data['args']})? [y/N] › "
+                    f"{RESET}").strip().lower() in ("y", "yes")
+                pause = _consume(
+                    respond_resume(pause.data["state"], pause.text,
+                                   pause.data["args"], ok),
+                    events, state)
             capture(user_msg, events)
         except (httpx.HTTPError, anthropic.APIError):
             print("\n[network error — nothing stored]")
             escalate_next = False
             continue
+        answer = state["answer"]
+        if answer and not state["started"]:  # action turns aren't streamed — print once
+            print(f"assistant › {answer}")
         print()
 
         escalate_next = False

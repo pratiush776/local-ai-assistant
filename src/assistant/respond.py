@@ -30,7 +30,7 @@ PRIMARY_LOCAL_MODEL = "qwen3.5:9b"
 ESCALATE_MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = "You are a helpful assistant whose main job is to help users ethically."
 
-EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval", "tool_call", "tool_result"]
+EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval", "tool_call", "tool_result","approval_request"]
 
 
 @dataclass
@@ -101,6 +101,32 @@ def _stream(messages, system, model) -> Iterator[tuple[str, object]]:
         yield from _stream_ollama(
             [{"role": "system", "content": system}] + messages, model
         )
+
+
+# ---------------------------- agent driver ----------------------------
+def _drive_agent(gen: Iterator[Event]) -> Iterator[Event]:
+    """Forward an agent event stream. Returns the final answer text, or None if
+    the run PAUSED for approval (the approval_request is forwarded, then we stop)."""
+    for ev in gen:
+        if ev.kind == "approval_request":
+            yield ev
+            return None  # paused; caller must not emit a terminal done
+        if ev.kind == "done":
+            return ev.text  # the agent's answer; caller emits the terminal done
+        yield ev  # tool_call / tool_result for Flow + trace
+
+
+def respond_resume(
+    state: list[dict], name: str, args: dict, approved: bool
+) -> Iterator[Event]:
+    """Continue an action turn after a human approved/denied a write. The surface
+    (CLI/GUI) calls this with the approval_request's data once it has the answer."""
+    from assistant import agent, tools
+    answer = yield from _drive_agent(
+        agent.resume_agent(state, name, args, approved, tools.TOOL_SCHEMAS))
+    if answer is not None:  # None => another write needs approval
+        yield Event("done", text=answer,
+                    data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
 
 
 # ---------------------------- the turn ----------------------------
@@ -232,16 +258,13 @@ def respond(
     if label == "action":
         from assistant import agent, tools  # local import avoids a circular import
         yield Event("status", "Working on it…")
-        answer = ""
-        for ev in agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS):
-            if ev.kind == "done":
-                answer = ev.text  # capture, but don't emit a second terminal done
-            else:
-                yield ev  # forward tool_call / tool_result for Flow + trace
-        timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
-        yield Event("timing", data=timings)
-        yield Event("done", text=answer,
-                    data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
+        answer = yield from _drive_agent(
+            agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS))
+        if answer is not None:  # None => paused for approval; the surface will resume
+            timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
+            yield Event("timing", data=timings)
+            yield Event("done", text=answer,
+                        data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
         return
 
     # ---- local / escalate: plain generation ----

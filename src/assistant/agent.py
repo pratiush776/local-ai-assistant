@@ -41,6 +41,24 @@ def _chat(messages: list[dict], tool_schemas: list[dict]) -> dict:
     return resp.json()["message"]
 
 
+def _execute(name: str, args: dict) -> str:
+    """Run one tool, turning any failure into a result string (errors-as-results)."""
+    try:
+        return tools.run_tool(name, args)
+    except Exception as e:  # noqa: BLE001 — ANY failure goes back to the model
+        return f"Error: {e}"
+
+
+def _record_call(
+    messages: list[dict], name: str, args: dict, result: str
+) -> Iterator[Event]:
+    """Emit the trace events for one tool call and append its result message.
+    Shared by the normal loop and the post-approval resume."""
+    yield Event("tool_call", text=name, data={"args": args})
+    yield Event("tool_result", text=name, data={"result": result})
+    messages.append({"role": "tool", "tool_name": name, "content": result})
+
+
 def run_agent(
     user_msg: str, history: list[dict], tool_schemas: list[dict]
 ) -> Iterator[Event]:
@@ -48,6 +66,11 @@ def run_agent(
     # Lead with the system prompt so the model knows it HAS tools (fixes refusals).
     messages = [{"role": "system", "content": AGENT_SYSTEM},
                 *history, {"role": "user", "content": user_msg}]
+    yield from _loop(messages, tool_schemas)
+
+
+def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
+    """The shared loop. Both run_agent and resume_agent drive this."""
     seen: set[tuple[str, str]] = set()   # (name, args) signatures already run
     deadline = time.monotonic() + MAX_SECONDS
 
@@ -74,15 +97,12 @@ def run_agent(
                 return
             seen.add(signature)
 
-            yield Event("tool_call", text=name, data={"args": args})
-            try:
-                result = tools.run_tool(name, args)
-            except Exception as e:  # noqa: BLE001 — errors-as-results: ANY failure goes back to the model
-                result = f"Error: {e}"
-            yield Event("tool_result", text=name, data={"result": result})
+            if needs_approval(name):
+                yield Event("approval_request", text=name,
+                            data={"args": args, "state": messages})
+                return
 
-            # One `tool` message per call, so each result is matched to its call.
-            messages.append({"role": "tool", "tool_name": name, "content": result})
+            yield from _record_call(messages, name, args, _execute(name, args))
 
         if time.monotonic() > deadline:  # wall-clock stop
             yield Event("done", text="This took too long, so I stopped.",
@@ -92,3 +112,19 @@ def run_agent(
     # Fell out of the loop -> hit MAX_STEPS without a final answer.
     yield Event("done", text="I reached my step limit before finishing.",
                 data={"steps": MAX_STEPS, "stopped": "max_steps"})
+
+
+def needs_approval(name: str) -> bool:
+    return name in tools.WRITE_TOOLS
+
+
+def resume_agent(
+    state: list[dict], name: str, args: dict, approved: bool, tool_schemas: list[dict]
+) -> Iterator[Event]:
+    """Continue a run that paused for approval. `state` is the saved messages list;
+    `name`/`args` are the write that was waiting (read off the approval_request event)."""
+    # Approve and deny differ only in the result string; both flow through the
+    # same record-then-continue path.
+    result = _execute(name, args) if approved else f"The user declined to run '{name}'."
+    yield from _record_call(state, name, args, result)
+    yield from _loop(state, tool_schemas)
