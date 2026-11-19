@@ -8,6 +8,7 @@ Two measurements, kept apart on purpose (see run_row):
   - answer behaviour : the full system via respond(), for refusal accuracy + (next
                        session) the judge's answer pass rate.
 """
+
 import json
 import statistics
 import time
@@ -120,7 +121,9 @@ def label_rows() -> None:
         print("=" * 72)
         print(f"[{i}/{len(todo)}] {r['id']}   Q: {r['question']}")
         print(f"  expected: {r['expected']}")
-        print(f"  actual  : {r['actual']}")  # full text: a truncated view hides late answers
+        print(
+            f"  actual  : {r['actual']}"
+        )  # full text: a truncated view hides late answers
         ans = input("  your call [p/f/s/q]> ").strip().lower()
         if ans == "q":
             break
@@ -149,19 +152,33 @@ def validate_judge(model: str = LOCAL_JUDGE) -> None:
         v, why = judge_one(r["question"], r["expected"], r["actual"], model)
         verdicts.append(v)
         reasons.append(why)
-        print(f"  [{i:2}/{len(rows)}] {r['id']}  you={labels[i-1]:4} judge={v:4}", flush=True)
+        print(
+            f"  [{i:2}/{len(rows)}] {r['id']}  you={labels[i - 1]:4} judge={v:4}",
+            flush=True,
+        )
 
     tpr, tnr = agreement(verdicts, labels)
     print("\n" + "=" * 58)
     print(f"JUDGE VALIDATION   ({model} vs my labels)")
     print("=" * 58)
-    print(f"  TPR (agree on my PASS): {tpr:5.0%}   ({labels.count('PASS')} PASS labels)")
-    print(f"  TNR (agree on my FAIL): {tnr:5.0%}   ({labels.count('FAIL')} FAIL labels)")
-    gate = "TRUST — both ≥ 0.80" if tpr >= 0.80 and tnr >= 0.80 else "BELOW GATE — escalate to Haiku"
+    print(
+        f"  TPR (agree on my PASS): {tpr:5.0%}   ({labels.count('PASS')} PASS labels)"
+    )
+    print(
+        f"  TNR (agree on my FAIL): {tnr:5.0%}   ({labels.count('FAIL')} FAIL labels)"
+    )
+    gate = (
+        "TRUST — both ≥ 0.80"
+        if tpr >= 0.80 and tnr >= 0.80
+        else "BELOW GATE — escalate to Haiku"
+    )
     print(f"  verdict: {gate}")
     print("=" * 58)
-    dis = [(r["id"], labels[i], verdicts[i], reasons[i])
-           for i, r in enumerate(rows) if labels[i] != verdicts[i]]
+    dis = [
+        (r["id"], labels[i], verdicts[i], reasons[i])
+        for i, r in enumerate(rows)
+        if labels[i] != verdicts[i]
+    ]
     if dis:
         print("\nDisagreements (you vs judge):")
         for rid, me, jv, why in dis:
@@ -194,8 +211,12 @@ def save_baseline(run_path: str) -> None:
     d = json.loads(Path(run_path).read_text())
     s = d["score"]
     counts = {m: s[m] for m in METRICS}
-    base = {"from": Path(run_path).name, "rerank": d.get("rerank"),
-            "counts": counts, "median_lat_s": d.get("median_lat_s")}
+    base = {
+        "from": Path(run_path).name,
+        "rerank": d.get("rerank"),
+        "counts": counts,
+        "median_lat_s": d.get("median_lat_s"),
+    }
     BASELINE.write_text(json.dumps(base, indent=2))
     print(f"Saved baseline from {base['from']} (rerank {base['rerank']}):")
     for m, (k, n) in counts.items():
@@ -210,7 +231,9 @@ def check_baseline() -> int:
     ordinary noise (a few rows flipping on n=40) as a regression; this doesn't.
     Local-only guard: CI keeps running pytest + ruff."""
     if not BASELINE.exists():
-        print(f"No baseline at {BASELINE}. Run: uv run evals --save-baseline <run.json>")
+        print(
+            f"No baseline at {BASELINE}. Run: uv run evals --save-baseline <run.json>"
+        )
         return 1
     base = json.loads(BASELINE.read_text())
     s = score(run_golden(load_golden())[0])
@@ -224,11 +247,16 @@ def check_baseline() -> int:
         now = nk / nn if nn else 0.0
         bad = now < lo
         failed = failed or bad
-        print(f"  {m:<12} now {now:6.1%}  base {bp:6.1%}  floor {lo:6.1%}  "
-              f"{'FAIL' if bad else 'ok'}")
+        print(
+            f"  {m:<12} now {now:6.1%}  base {bp:6.1%}  floor {lo:6.1%}  "
+            f"{'FAIL' if bad else 'ok'}"
+        )
     print("=" * 64)
-    print("REGRESSION — a score fell below the baseline's noise floor"
-          if failed else "OK — every score within the baseline's noise band")
+    print(
+        "REGRESSION — a score fell below the baseline's noise floor"
+        if failed
+        else "OK — every score within the baseline's noise band"
+    )
     return 1 if failed else 0
 
 
@@ -243,19 +271,25 @@ def compare_runs(path_a: str, path_b: str) -> None:
 
     pa = [rows_a[i].get("judge") == "PASS" for i in ids]
     pb = [rows_b[i].get("judge") == "PASS" for i in ids]
-    a_only, b_only_wrong, chi = mcnemar(pa, pb)  # a_only: A pass & B fail; b: A fail & B pass
+    a_only, b_only_wrong, chi = mcnemar(
+        pa, pb
+    )  # a_only: A pass & B fail; b: A fail & B pass
 
     lat_a = statistics.median(rows_a[i].get("latency_s", 0) for i in ids)
     lat_b = statistics.median(rows_b[i].get("latency_s", 0) for i in ids)
     tag_a, tag_b = a.get("rerank", "A"), b.get("rerank", "B")
 
     print("\n" + "=" * 58)
-    print(f"COMPARE  A={tag_a} ({Path(path_a).name})  vs  B={tag_b} ({Path(path_b).name})")
+    print(
+        f"COMPARE  A={tag_a} ({Path(path_a).name})  vs  B={tag_b} ({Path(path_b).name})"
+    )
     print("=" * 58)
     print(f"  pass rate   A {sum(pa):2}/{len(ids)}   B {sum(pb):2}/{len(ids)}")
     print(f"  flips       A-only-right {a_only}   B-only-right {b_only_wrong}")
     print(f"  McNemar     chi^2(cc) = {chi:.2f}   (>3.84 = significant at .05)")
-    print(f"  median lat  A {lat_a:5.1f}s   B {lat_b:5.1f}s   (B-A = {lat_b - lat_a:+.1f}s)")
+    print(
+        f"  median lat  A {lat_a:5.1f}s   B {lat_b:5.1f}s   (B-A = {lat_b - lat_a:+.1f}s)"
+    )
     print("=" * 58)
     disagree = [i for i in ids if pa[ids.index(i)] != pb[ids.index(i)]]
     if disagree:
@@ -312,8 +346,14 @@ def main() -> None:
     out = OUT_DIR / f"run-{rerank_tag}-{stamp}.json"
     out.write_text(
         json.dumps(
-            {"ts": stamp, "dur_s": round(dur, 1), "rerank": rerank_tag,
-             "median_lat_s": round(median_lat, 2), "score": s, "results": results},
+            {
+                "ts": stamp,
+                "dur_s": round(dur, 1),
+                "rerank": rerank_tag,
+                "median_lat_s": round(median_lat, 2),
+                "score": s,
+                "results": results,
+            },
             indent=2,
         )
     )

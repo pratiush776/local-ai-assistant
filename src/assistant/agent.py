@@ -3,6 +3,7 @@
 run_agent drives one request to completion: call the model, run any tools it
 asks for, feed results back, repeat — until it answers or a stop condition trips.
 """
+
 import json
 import time
 from collections.abc import Iterator
@@ -13,8 +14,8 @@ from assistant import tools
 from assistant.ollama import OLLAMA_URL
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
-MAX_STEPS = 8          # hard ceiling on model calls (cost/time)
-MAX_SECONDS = 120      # wall-clock budget
+MAX_STEPS = 8  # hard ceiling on model calls (cost/time)
+MAX_SECONDS = 120  # wall-clock budget
 
 # Without this, the model defaults to "I'm an LLM, I can't see your files" and
 # refuses to call tools. It must know it HAS tools and should use them.
@@ -64,22 +65,25 @@ def run_agent(
 ) -> Iterator[Event]:
     # Don't mutate the caller's history; build our own working copy.
     # Lead with the system prompt so the model knows it HAS tools (fixes refusals).
-    messages = [{"role": "system", "content": AGENT_SYSTEM},
-                *history, {"role": "user", "content": user_msg}]
+    messages = [
+        {"role": "system", "content": AGENT_SYSTEM},
+        *history,
+        {"role": "user", "content": user_msg},
+    ]
     yield from _loop(messages, tool_schemas)
 
 
 def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
     """The shared loop. Both run_agent and resume_agent drive this."""
-    seen: set[tuple[str, str]] = set()   # (name, args) signatures already run
+    seen: set[tuple[str, str]] = set()  # (name, args) signatures already run
     deadline = time.monotonic() + MAX_SECONDS
 
     for step in range(MAX_STEPS):
         msg = _chat(messages, tool_schemas)
-        messages.append(msg)             # keep the assistant turn WHOLE (incl. tool_calls)
+        messages.append(msg)  # keep the assistant turn WHOLE (incl. tool_calls)
 
         calls = msg.get("tool_calls")
-        if not calls:                    # no tools asked for -> this is the answer
+        if not calls:  # no tools asked for -> this is the answer
             yield Event("done", text=msg.get("content", ""), data={"steps": step + 1})
             return
 
@@ -90,28 +94,39 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
 
             # Stop condition: the exact same call already ran -> it's stuck, not progressing.
             if signature in seen:
-                yield Event("done",
-                            text="I kept repeating the same step without progress, "
-                                 "so I stopped. I couldn't complete that.",
-                            data={"steps": step + 1, "stopped": "repeat"})
+                yield Event(
+                    "done",
+                    text="I kept repeating the same step without progress, "
+                    "so I stopped. I couldn't complete that.",
+                    data={"steps": step + 1, "stopped": "repeat"},
+                )
                 return
             seen.add(signature)
 
             if needs_approval(name):
-                yield Event("approval_request", text=name,
-                            data={"args": args, "state": messages})
+                yield Event(
+                    "approval_request",
+                    text=name,
+                    data={"args": args, "state": messages},
+                )
                 return
 
             yield from _record_call(messages, name, args, _execute(name, args))
 
         if time.monotonic() > deadline:  # wall-clock stop
-            yield Event("done", text="This took too long, so I stopped.",
-                        data={"steps": step + 1, "stopped": "time"})
+            yield Event(
+                "done",
+                text="This took too long, so I stopped.",
+                data={"steps": step + 1, "stopped": "time"},
+            )
             return
 
     # Fell out of the loop -> hit MAX_STEPS without a final answer.
-    yield Event("done", text="I reached my step limit before finishing.",
-                data={"steps": MAX_STEPS, "stopped": "max_steps"})
+    yield Event(
+        "done",
+        text="I reached my step limit before finishing.",
+        data={"steps": MAX_STEPS, "stopped": "max_steps"},
+    )
 
 
 def needs_approval(name: str) -> bool:

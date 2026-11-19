@@ -4,6 +4,7 @@ Run:  uv run assistant-review              # review traces that have no note yet
       uv run assistant-review --all        # re-walk every trace
       uv run assistant-review --notes       # dump all notes (for grouping)
 """
+
 import json
 import sys
 import time
@@ -45,8 +46,12 @@ def noted_ids() -> set[str]:
 
 def save_note(rec: dict, note: str) -> None:
     NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    row = {"turn_id": rec["turn_id"], "query": rec["query"],
-           "note": note, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    row = {
+        "turn_id": rec["turn_id"],
+        "query": rec["query"],
+        "note": note,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
     with NOTES_FILE.open("a") as f:
         f.write(json.dumps(row) + "\n")
 
@@ -54,9 +59,11 @@ def save_note(rec: dict, note: str) -> None:
 # ---------- render ----------
 def show(rec: dict, chunks: dict[str, str], n: int, total: int) -> None:
     print("\n" + "=" * 72)
-    print(f"[{n}/{total}]  {rec.get('ts')}   route={rec.get('route')} "
-          f"label={rec.get('label')} model={rec.get('model')} "
-          f"not_found={rec.get('not_found')}")
+    print(
+        f"[{n}/{total}]  {rec.get('ts')}   route={rec.get('route')} "
+        f"label={rec.get('label')} model={rec.get('model')} "
+        f"not_found={rec.get('not_found')}"
+    )
     print(f"\nQ: {rec['query']}\n")
     for i, c in enumerate(rec["retrieved"], 1):
         tag = "KEPT" if c["kept"] else "drop"

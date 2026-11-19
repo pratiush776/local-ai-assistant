@@ -86,6 +86,7 @@ def _reranker() -> CrossEncoder:
 def warmup_reranker() -> None:
     _reranker()
 
+
 def rag_retrieve(question: str) -> list[tuple[str, str, float]]:
     """Every candidate as (chunk_id, text, score), best first.
     Reranker ON  -> score is the cross-encoder relevance score.
@@ -96,6 +97,7 @@ def rag_retrieve(question: str) -> list[tuple[str, str, float]]:
     scores = _reranker().predict([[question, text] for _, text, _ in hits])
     reranked = sorted(zip(hits, scores), key=lambda x: x[1], reverse=True)
     return [(cid, text, float(score)) for (cid, text, _), score in reranked]
+
 
 def rag_search(question: str) -> list[tuple[str, str]]:
     chunks = rag_retrieve(question)  # best-first

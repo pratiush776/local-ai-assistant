@@ -72,16 +72,20 @@ def chat() -> None:
         state, events = {"answer": "", "started": False}, []
         try:
             pause = _consume(
-                respond(user_msg, messages, force_escalate=escalate_next),
-                events, state)
+                respond(user_msg, messages, force_escalate=escalate_next), events, state
+            )
             while pause is not None:  # a write is waiting — ask, then resume
                 ok = input(
                     f"\n{DIM}approve {pause.text}({pause.data['args']})? [y/N] › "
-                    f"{RESET}").strip().lower() in ("y", "yes")
+                    f"{RESET}"
+                ).strip().lower() in ("y", "yes")
                 pause = _consume(
-                    respond_resume(pause.data["state"], pause.text,
-                                   pause.data["args"], ok),
-                    events, state)
+                    respond_resume(
+                        pause.data["state"], pause.text, pause.data["args"], ok
+                    ),
+                    events,
+                    state,
+                )
             capture(user_msg, events)
         except (httpx.HTTPError, anthropic.APIError):
             print("\n[network error — nothing stored]")

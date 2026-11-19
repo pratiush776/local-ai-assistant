@@ -3,6 +3,7 @@
 Validated before it is trusted: agreement() scores the judge against my own hand
 labels (method 5.4). Local model first; escalate to Haiku only if TPR or TNR < 0.80.
 """
+
 import httpx
 
 from ..claude import client as claude_client
@@ -58,16 +59,13 @@ def judge_one(
     question: str, expected: str, actual: str, model: str = JUDGE_MODEL
 ) -> tuple[str, str]:
     """Return ('PASS'|'FAIL', one-line reason)."""
-    user = (
-        f"Question: {question}\n"
-        f"Expected answer: {expected}\n"
-        f"Actual answer: {actual}"
-    )
+    user = f"Question: {question}\nExpected answer: {expected}\nActual answer: {actual}"
     reply = _complete(JUDGE_SYSTEM, user, model).strip()
     verdict = "PASS" if reply.lower().startswith("pass") else "FAIL"
     lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
     reason = next((ln for ln in lines if ln.upper() not in ("PASS", "FAIL")), "")
     return verdict, reason
+
 
 # (3) Score the judge against my labels. Both lists are "PASS"/"FAIL", same order.
 #     TPR = of the rows I labelled PASS, the fraction the judge also called PASS.
@@ -79,5 +77,6 @@ def agreement(verdicts: list[str], labels: list[str]) -> tuple[float, float]:
     tpr = on_pass.count("PASS") / len(on_pass) if on_pass else 0.0
     tnr = on_fail.count("FAIL") / len(on_fail) if on_fail else 0.0
     return tpr, tnr
+
 
 # =======================================================================

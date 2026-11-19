@@ -180,7 +180,8 @@ def _apply_event(ev, ctx: dict) -> None:
     elif ev.kind == "route":
         ctx["route_txt"] = ev.data["label"] or ev.data["route"]
         ctx["flow"].append(
-            f"**Route:** `{ctx['route_txt']}` · conf {ev.data['confidence']:.2f}")
+            f"**Route:** `{ctx['route_txt']}` · conf {ev.data['confidence']:.2f}"
+        )
     elif ev.kind == "delta":
         ctx["answer"] += ev.text
         ctx["final"] = ctx["answer"]
@@ -201,9 +202,17 @@ def _apply_event(ev, ctx: dict) -> None:
 
 def _frame(ctx: dict, clean, turn_cites, *, ask=False, pending=None):
     """One GUI output tuple. `ask` toggles the Approve/Deny buttons."""
-    return (_BLANK, ctx["display"], clean, ctx["last_cite"],
-            _flow_md(ctx["flow"], ctx["timings"]), turn_cites,
-            gr.update(visible=ask), gr.update(visible=ask), pending)
+    return (
+        _BLANK,
+        ctx["display"],
+        clean,
+        ctx["last_cite"],
+        _flow_md(ctx["flow"], ctx["timings"]),
+        turn_cites,
+        gr.update(visible=ask),
+        gr.update(visible=ask),
+        pending,
+    )
 
 
 def _stream_frames(stream, ctx, clean, turn_cites):
@@ -219,10 +228,17 @@ def _stream_frames(stream, ctx, clean, turn_cites):
 
 def _ask_frame(ctx, pause, clean, turn_cites):
     """Pause the turn: show the exact pending write and reveal the buttons."""
-    ctx["flow"].append(f"**⏸ approve** `{pause.text}`(`{pause.data.get('args', {})}`)**?**")
-    pending = {"state": pause.data["state"], "name": pause.text,
-               "args": pause.data["args"], "ctx": ctx,
-               "clean": clean, "turn_cites": turn_cites}
+    ctx["flow"].append(
+        f"**⏸ approve** `{pause.text}`(`{pause.data.get('args', {})}`)**?**"
+    )
+    pending = {
+        "state": pause.data["state"],
+        "name": pause.text,
+        "args": pause.data["args"],
+        "ctx": ctx,
+        "clean": clean,
+        "turn_cites": turn_cites,
+    }
     return _frame(ctx, clean, turn_cites, ask=True, pending=pending)
 
 
@@ -231,16 +247,25 @@ def _finish(ctx, clean, turn_cites):
     capture(ctx["text"], ctx["events"])
     display = ctx["display"]
     display[-1]["content"] = ctx["final"] + _meta(
-        ctx["route_txt"], ctx["timings"], bool(ctx["cids"]))
+        ctx["route_txt"], ctx["timings"], bool(ctx["cids"])
+    )
     new_clean = clean + [
         {"role": "user", "content": ctx["text"]},
         {"role": "assistant", "content": ctx["final"]},
     ]
     new_cite = {"ids": ctx["cids"], "texts": ctx["ctexts"]}
     new_turn_cites = {**turn_cites, len(display) - 1: new_cite}
-    yield (_BLANK, display, new_clean, new_cite,
-           _flow_md(ctx["flow"], ctx["timings"]), new_turn_cites,
-           gr.update(visible=False), gr.update(visible=False), None)
+    yield (
+        _BLANK,
+        display,
+        new_clean,
+        new_cite,
+        _flow_md(ctx["flow"], ctx["timings"]),
+        new_turn_cites,
+        gr.update(visible=False),
+        gr.update(visible=False),
+        None,
+    )
 
 
 def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
@@ -259,8 +284,17 @@ def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
     if not text:  # files only
         if notes:
             display = display + [{"role": "assistant", "content": "\n".join(notes)}]
-        yield (_BLANK, display, clean, {"ids": [], "texts": []}, gr.update(),
-               turn_cites, hide, hide, None)
+        yield (
+            _BLANK,
+            display,
+            clean,
+            {"ids": [], "texts": []},
+            gr.update(),
+            turn_cites,
+            hide,
+            hide,
+            None,
+        )
         return
 
     if notes:
@@ -270,12 +304,23 @@ def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
         {"role": "assistant", "content": "<sub>· thinking…</sub>"},
     ]
 
-    ctx = {"display": display, "flow": ["**Flow**"], "answer": "", "final": "",
-           "route_txt": "", "timings": {}, "cids": [], "ctexts": [],
-           "events": [], "last_cite": last_cite, "text": text}
+    ctx = {
+        "display": display,
+        "flow": ["**Flow**"],
+        "answer": "",
+        "final": "",
+        "route_txt": "",
+        "timings": {},
+        "cids": [],
+        "ctexts": [],
+        "events": [],
+        "last_cite": last_cite,
+        "text": text,
+    }
 
     pause = yield from _stream_frames(
-        respond(text, clean, force_escalate=force), ctx, clean, turn_cites)
+        respond(text, clean, force_escalate=force), ctx, clean, turn_cites
+    )
     if pause is not None:  # a write is waiting — reveal Approve/Deny and stop
         yield _ask_frame(ctx, pause, clean, turn_cites)
         return
@@ -287,10 +332,12 @@ def resume_fn(approved: bool, pending):
     if not pending:
         return
     ctx = pending["ctx"]
-    stream = respond_resume(pending["state"], pending["name"],
-                            pending["args"], approved)
+    stream = respond_resume(
+        pending["state"], pending["name"], pending["args"], approved
+    )
     pause = yield from _stream_frames(
-        stream, ctx, pending["clean"], pending["turn_cites"])
+        stream, ctx, pending["clean"], pending["turn_cites"]
+    )
     if pause is not None:  # another write — ask again
         yield _ask_frame(ctx, pause, pending["clean"], pending["turn_cites"])
         return
@@ -318,7 +365,7 @@ def clear_all():
         {},
         gr.update(visible=False),  # approve_btn
         gr.update(visible=False),  # deny_btn
-        None,                      # pending_state
+        None,  # pending_state
         *_render(nav, empty),
     )
 
@@ -378,10 +425,10 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                 submit_btn=True,
             )
             with gr.Row(elem_id="approvalbar"):
-                approve_btn = gr.Button("✓ Approve", variant="primary",
-                                        visible=False, scale=1)
-                deny_btn = gr.Button("✗ Deny", variant="stop",
-                                     visible=False, scale=1)
+                approve_btn = gr.Button(
+                    "✓ Approve", variant="primary", visible=False, scale=1
+                )
+                deny_btn = gr.Button("✗ Deny", variant="stop", visible=False, scale=1)
         with gr.Column(scale=2, min_width=320, elem_id="rail"):
             with gr.Tabs() as rail_tabs:
                 with gr.Tab("Memory", id="memory"):
@@ -455,8 +502,17 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     apply_status = gr.Markdown("")
 
     render_out = [rail_title, back_btn, selector, content]
-    chat_out = [msg, chatbot, clean_state, cite_state, flow_md, turn_cites_state,
-                approve_btn, deny_btn, pending_state]
+    chat_out = [
+        msg,
+        chatbot,
+        clean_state,
+        cite_state,
+        flow_md,
+        turn_cites_state,
+        approve_btn,
+        deny_btn,
+        pending_state,
+    ]
     sub = msg.submit(
         chat_fn,
         [msg, chatbot, clean_state, cite_state, turn_cites_state, pending_state],

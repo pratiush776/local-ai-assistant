@@ -30,7 +30,18 @@ PRIMARY_LOCAL_MODEL = "qwen3.5:9b"
 ESCALATE_MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = "You are a helpful assistant whose main job is to help users ethically."
 
-EventKind = Literal["status", "route", "delta", "citations", "timing", "done","retrieval", "tool_call", "tool_result","approval_request"]
+EventKind = Literal[
+    "status",
+    "route",
+    "delta",
+    "citations",
+    "timing",
+    "done",
+    "retrieval",
+    "tool_call",
+    "tool_result",
+    "approval_request",
+]
 
 
 @dataclass
@@ -86,11 +97,14 @@ def _stream_claude(
         for text in stream.text_stream:
             yield "delta", text
         final = stream.get_final_message()
-    yield "stats", {
-        "input_tokens": final.usage.input_tokens,
-        "output_tokens": final.usage.output_tokens,
-        "tokens_per_sec": None,
-    }
+    yield (
+        "stats",
+        {
+            "input_tokens": final.usage.input_tokens,
+            "output_tokens": final.usage.output_tokens,
+            "tokens_per_sec": None,
+        },
+    )
 
 
 def _stream(messages, system, model) -> Iterator[tuple[str, object]]:
@@ -122,11 +136,14 @@ def respond_resume(
     """Continue an action turn after a human approved/denied a write. The surface
     (CLI/GUI) calls this with the approval_request's data once it has the answer."""
     from assistant import agent, tools
+
     answer = yield from _drive_agent(
-        agent.resume_agent(state, name, args, approved, tools.TOOL_SCHEMAS))
+        agent.resume_agent(state, name, args, approved, tools.TOOL_SCHEMAS)
+    )
     if answer is not None:  # None => another write needs approval
-        yield Event("done", text=answer,
-                    data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
+        yield Event(
+            "done", text=answer, data={"label": "action", "model": PRIMARY_LOCAL_MODEL}
+        )
 
 
 # ---------------------------- the turn ----------------------------
@@ -194,22 +211,31 @@ def respond(
         ts = time.perf_counter()
         chunks = rag.rag_retrieve(user_msg)
         timings["retrieve_rerank_ms"] = round((time.perf_counter() - ts) * 1000)
-        #-- kept or dropped: fixed top-N by rank when KEEP_N set, else the score threshold
+
+        # -- kept or dropped: fixed top-N by rank when KEEP_N set, else the score threshold
         def _kept(rank: int, score: float) -> bool:
             if rag.KEEP_N is not None:
                 return rank < rag.KEEP_N
             return score >= rag.RERANK_THRESHOLD
+
         rows = [
             {
                 "id": cid,
-                "score": round(float(score),4),
-                "preview":text[:80],
-                "kept": _kept(i, score)
-            } for i, (cid, text, score) in enumerate(chunks)
+                "score": round(float(score), 4),
+                "preview": text[:80],
+                "kept": _kept(i, score),
+            }
+            for i, (cid, text, score) in enumerate(chunks)
         ]
         kept_n = sum(r["kept"] for r in rows)
-        yield Event(kind="retrieval",text=f"{kept_n}/{len(chunks)} kept", data={"chunks":rows})
-        hits = [(cid,text) for i,(cid,text,score) in enumerate(chunks) if _kept(i,score)]
+        yield Event(
+            kind="retrieval", text=f"{kept_n}/{len(chunks)} kept", data={"chunks": rows}
+        )
+        hits = [
+            (cid, text)
+            for i, (cid, text, score) in enumerate(chunks)
+            if _kept(i, score)
+        ]
         if not hits:
             yield Event("status", "Nothing relevant in your files.")
             timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
@@ -257,14 +283,19 @@ def respond(
     # ---- action: hand off to the agent loop (tools + approval) ----
     if label == "action":
         from assistant import agent, tools  # local import avoids a circular import
+
         yield Event("status", "Working on it…")
         answer = yield from _drive_agent(
-            agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS))
+            agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS)
+        )
         if answer is not None:  # None => paused for approval; the surface will resume
             timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
             yield Event("timing", data=timings)
-            yield Event("done", text=answer,
-                        data={"label": "action", "model": PRIMARY_LOCAL_MODEL})
+            yield Event(
+                "done",
+                text=answer,
+                data={"label": "action", "model": PRIMARY_LOCAL_MODEL},
+            )
         return
 
     # ---- local / escalate: plain generation ----
