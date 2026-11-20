@@ -12,21 +12,9 @@ import sys
 import time
 from pathlib import Path
 
-import psycopg
-
 from . import rag
 
 SKIP = {".DS_Store"}  # noise, not documents
-
-
-def _wipe() -> int:
-    with psycopg.connect(rag.DSN, autocommit=True) as conn:
-        try:
-            n = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
-            conn.execute("TRUNCATE chunks")
-            return n
-        except psycopg.errors.UndefinedTable:
-            return 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -38,7 +26,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(2)
 
     if fresh:
-        removed = _wipe()
+        removed = rag.wipe()  # backend-agnostic: TRUNCATE (pg) or DELETE (sqlite)
         print(f"[fresh] emptied store ({removed} chunks removed)\n")
 
     files = sorted(

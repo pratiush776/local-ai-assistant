@@ -14,7 +14,6 @@ from pathlib import Path
 
 import gradio as gr
 import httpx
-import psycopg
 
 from . import rag
 from .respond import respond, respond_resume
@@ -53,7 +52,7 @@ button.primary { background: #15130f !important; color: #faf8f4 !important; }
 def _choices() -> list[tuple[str, str]]:
     try:
         return [(f"{Path(s).name}  ·  {n}", s) for s, n in rag.list_sources()]
-    except psycopg.Error:
+    except Exception:  # noqa: BLE001 — panel fallback: any backend error -> empty list
         return []
 
 

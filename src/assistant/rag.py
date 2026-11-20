@@ -1,16 +1,22 @@
-import hashlib
+"""RAG orchestration — backend-agnostic.
+
+This module owns everything that is the same no matter where chunks live:
+embedding, the cross-encoder reranker, the kept-set thresholds, RRF_K, and the
+grounding prompt. The actual storage + hybrid query live behind a
+`RetrievalBackend` (see `retrieval/`), chosen by the RETRIEVAL_BACKEND env var.
+The six functions at the bottom just delegate to the active backend, so swapping
+ParadeDB <-> SQLite never touches the callers (respond, tools, gui, trace, evals).
+"""
+
 from typing import Literal
 
 import httpx
 import numpy as np
-import psycopg
-from docling.chunking import HybridChunker  # type: ignore[reportPrivateImportUsage]
-from docling.document_converter import DocumentConverter
-from pgvector.psycopg import register_vector
 from sentence_transformers import CrossEncoder
 
-# --- config (single source of truth) ---
-DSN = "postgresql://postgres:rag@localhost:5432/postgres"
+from .retrieval import get_backend
+
+# --- config (single source of truth, backend-agnostic) ---
 OLLAMA_URL = "http://localhost:11434/api/"
 EMBED_MODEL = "nomic-embed-text"
 GEN_MODEL = "qwen3.5:9b"
@@ -49,33 +55,7 @@ def embed(
     return np.array(r.json()["embeddings"])
 
 
-def hybrid_retrieve(
-    question: str, k=TOP_K
-) -> list[tuple[str, str, float]]:  # (chunk_id, text, rrf_score), #3
-    # DB search
-    SQL = """
-WITH vec AS (
-    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %(q)s) rank
-    FROM chunks ORDER BY embedding <=> %(q)s LIMIT %(k)s
-),kw AS (
-    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY paradedb.score(chunk_id) DESC) rank
-    FROM chunks WHERE chunk_id @@@ paradedb.match('text', %(t)s) LIMIT %(k)s
-)
-SELECT c.chunk_id, c.text, 
-    COALESCE(1.0/(%(rrf_k)s+vec.rank),0) + COALESCE(1.0/(%(rrf_k)s+kw.rank),0) AS rrf
-FROM vec FULL OUTER JOIN kw USING (chunk_id)
-JOIN chunks c ON c.chunk_id = COALESCE(vec.chunk_id, kw.chunk_id)
-ORDER BY rrf DESC LIMIT %(k)s;
-"""
-    query_vector = embed([question], "search_query")[0]
-    with psycopg.connect(DSN) as conn:
-        register_vector(conn)
-        rows = conn.execute(
-            SQL, {"q": query_vector, "t": question, "rrf_k": RRF_K, "k": k}
-        ).fetchall()
-    return [(cid, text, float(rrf)) for cid, text, rrf in rows]
-
-
+# ---------------------------- reranking / kept-set (backend-agnostic) ----------------------------
 def _reranker() -> CrossEncoder:
     global _RERANKER
     if _RERANKER is None:
@@ -112,93 +92,33 @@ def format_context(hits: list[tuple[str, str]]) -> str:
     )
 
 
-# ---- read-only views of what's in memory (for the GUI's Memory panel) ----
-def list_sources() -> list[tuple[str, int]]:
-    """Every ingested file and how many chunks it holds."""
-    with psycopg.connect(DSN) as conn:
-        return conn.execute(
-            "SELECT source, count(*) FROM chunks GROUP BY source ORDER BY source"
-        ).fetchall()
-
-
-def chunks_for_source(source: str) -> list[tuple[str, str]]:
-    """The indexed chunks (id, text) of one file — the actual retrieval units."""
-    with psycopg.connect(DSN) as conn:
-        return conn.execute(
-            "SELECT chunk_id, text FROM chunks WHERE source = %s ORDER BY chunk_id",
-            (source,),
-        ).fetchall()
-
-
-def sources_for_chunks(cids: list[str]) -> dict[str, str]:
-    """Map cited chunk ids back to their source file, for citation tracing."""
-    if not cids:
-        return {}
-    with psycopg.connect(DSN) as conn:
-        rows = conn.execute(
-            "SELECT chunk_id, source FROM chunks WHERE chunk_id = ANY(%s)", (cids,)
-        ).fetchall()
-    return {cid: src for cid, src in rows}
-
-
-def texts_for_chunks(cids: list[str]) -> dict[str, str]:
-    """Map chunk ids to their full text — the content the trace sidecar freezes."""
-    if not cids:
-        return {}
-    with psycopg.connect(DSN) as conn:
-        rows = conn.execute(
-            "SELECT chunk_id, text FROM chunks WHERE chunk_id = ANY(%s)", (cids,)
-        ).fetchall()
-    return {cid: text for cid, text in rows}
+# ---------------------------- backend delegation ----------------------------
+# These six + wipe are the only storage-specific calls; the active backend
+# (ParadeDB or SQLite) implements them. Kept as module-level names so tests can
+# still monkeypatch rag.hybrid_retrieve.
+def hybrid_retrieve(question: str, k: int = TOP_K) -> list[tuple[str, str, float]]:
+    return get_backend().hybrid_retrieve(question, k)
 
 
 def ingest(path: str) -> dict:
-    doc = DocumentConverter().convert(path).document
-    chunker = HybridChunker()
-    chunks = list(chunker.chunk(doc))
+    return get_backend().ingest(path)
 
-    rows = []
-    for ch in chunks:
-        text = chunker.contextualize(chunk=ch)
-        cid = hashlib.sha256(text.encode()).hexdigest()[:16]
-        rows.append((cid, path, text))
 
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        register_vector(conn)
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        conn.execute("CREATE EXTENSION IF NOT EXISTS pg_search")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chunks (
-            chunk_id text PRIMARY KEY,
-            source text NOT NULL,
-            text text NOT NULL,
-            embedding vector(768)
-            )
-    """)
-        vecs = embed([t for _, _, t in rows], "search_document")
-        before = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]  # type: ignore[reportPrivateImportUsage]
-        with conn.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO chunks (chunk_id, source, text, embedding) VALUES (%s,%s,%s,%s)"
-                "ON CONFLICT (chunk_id) DO NOTHING",
-                [(cid, src, text, v) for (cid, src, text), v in zip(rows, vecs)],
-            )
-        after = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]  # type: ignore[reportPrivateImportUsage]
+def wipe() -> int:
+    return get_backend().wipe()
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS chunks_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS chunks_bm25 ON chunks USING bm25 (chunk_id, text) WITH (key_field='chunk_id')"
-        )
 
-        current_ids = [cid for cid, _, _ in rows]
-        deleted = conn.execute(
-            "DELETE FROM chunks WHERE source = %s AND chunk_id <> ALL(%s)",
-            (path, current_ids),
-        ).rowcount
-        return {
-            "inserted": after - before,
-            "deleted": deleted,
-            "total": after - deleted,
-        }
+def list_sources() -> list[tuple[str, int]]:
+    return get_backend().list_sources()
+
+
+def chunks_for_source(source: str) -> list[tuple[str, str]]:
+    return get_backend().chunks_for_source(source)
+
+
+def sources_for_chunks(cids: list[str]) -> dict[str, str]:
+    return get_backend().sources_for_chunks(cids)
+
+
+def texts_for_chunks(cids: list[str]) -> dict[str, str]:
+    return get_backend().texts_for_chunks(cids)
