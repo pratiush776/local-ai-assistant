@@ -12,12 +12,11 @@ Four numbers (the dossier's rows):
 Two things make this different from the golden eval:
   1. There is no human at an eval, so writes are AUTO-APPROVED: when the loop yields
      approval_request, we call resume_agent(approved=True) ourselves and continue.
-  2. Write success is read off the DB, so each task runs against a freshly reset DB
-     (events reseeded from the persona calendar + one seed reminder) for isolation.
+  2. Each task runs and is scored against its own in-memory database, seeded with
+     the persona calendar and one reminder.
 """
 
 import json
-import sqlite3
 import statistics
 import time
 from datetime import datetime
@@ -36,22 +35,6 @@ SEED_REMINDER = ("Submit expense report", "2024-05-16")  # baseline row OWN1 rea
 def load_tasks() -> list[dict]:
     with TASKS.open() as f:
         return [json.loads(line) for line in f if line.strip()]
-
-
-def reset_db() -> None:
-    """Put the assistant DB in a known state before each task: events reseeded from
-    the persona calendar, reminders cleared to a single baseline row."""
-    tools.init_db()  # ensure tables exist
-    seed = json.loads(tools.CALENDAR_SEED.read_text())
-    with tools._db() as conn:
-        conn.execute("DELETE FROM events")
-        conn.execute("DELETE FROM reminders")
-        conn.executemany(
-            f"INSERT INTO events ({tools.EVENT_COLS}) VALUES (?,?,?,?,?,?,?)",
-            tools._event_rows(seed),
-        )
-        conn.execute("INSERT INTO reminders (text,date) VALUES (?,?)", SEED_REMINDER)
-    tools._db_ready = True  # don't let lazy-init reseed over us
 
 
 def drive(task_text: str) -> list:
@@ -89,25 +72,26 @@ def _tool_stats(events: list) -> tuple[int, int]:
 
 
 def run_task(task: dict) -> dict:
-    """Reset, run, score one task."""
-    reset_db()
-    t0 = time.perf_counter()
-    events = drive(task["task"])
-    latency_s = time.perf_counter() - t0
+    """Run and score one task against a disposable database."""
+    if not tools.CALENDAR_SEED.is_file():
+        raise FileNotFoundError(tools.CALENDAR_SEED)
+    with tools.temporary_database() as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO reminders (text,date) VALUES (?,?)", SEED_REMINDER
+            )
+        t0 = time.perf_counter()
+        events = drive(task["task"])
+        latency_s = time.perf_counter() - t0
 
-    answer = next((e.text for e in reversed(events) if e.kind == "done"), "")
+        answer = next((e.text for e in reversed(events) if e.kind == "done"), "")
+        try:
+            passed = bool(CHECKS[task["check"]](answer, conn))
+        except Exception as e:  # noqa: BLE001 — a broken check is a fail, not a crash
+            passed, answer = False, f"[check error: {e}] {answer}"
+
     n_calls = sum(1 for e in events if e.kind == "tool_call")
     valid_calls, total_calls = _tool_stats(events)
-
-    # task success: check reads `answer` (read task) or queries the post-run DB (write)
-    conn = sqlite3.connect(tools.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        passed = bool(CHECKS[task["check"]](answer, conn))
-    except Exception as e:  # noqa: BLE001 — a broken check is a fail, not a crash
-        passed, answer = False, f"[check error: {e}] {answer}"
-    finally:
-        conn.close()
 
     capture(task["task"], events)  # persist a trace per task, like every real turn
     return {

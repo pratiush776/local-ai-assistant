@@ -1,10 +1,11 @@
 """Agent tools: schemas (what the model sees) + bodies (what actually runs).
 
-Six tools over Emma's world:
-  read   : search_files, read_file, list_events, list_reminders
+Seven tools over Emma's world:
+  read   : search_files, read_file, list_events, find_event, list_reminders
   write  : add_event, add_reminder   (risk level set here in code, used in 6.3)
 
-State lives in SQLite (data/assistant.db), seeded once from the persona calendar.
+App state lives in SQLite (data/assistant.db), seeded from the persona calendar.
+Agent evals use a separate in-memory database for each task.
 Every tool reads "now" from PERSONA_TODAY — Emma's world is frozen at 2024-05-15.
 
 Contract agent.py depends on:
@@ -16,6 +17,9 @@ Contract agent.py depends on:
 import datetime as dt
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
@@ -27,13 +31,35 @@ CALENDAR_SEED = Path("data/assets/persona/calendar.json")
 FILES_INDEX = Path("data/assets/persona/files_index.json")
 
 WRITE_TOOLS: set[str] = {"add_event", "add_reminder"}
+_temporary_db: ContextVar[sqlite3.Connection | None] = ContextVar(
+    "temporary_db", default=None
+)
 
 
 # --- storage -----------------------------------------------------------------
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+@contextmanager
+def _db() -> Iterator[sqlite3.Connection]:
+    temporary = _temporary_db.get()
+    if temporary is not None:
+        with temporary:
+            yield temporary
+        return
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        yield conn
+
+
+@contextmanager
+def temporary_database() -> Iterator[sqlite3.Connection]:
+    """Give tool calls in this context a fresh, seeded SQLite database."""
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.row_factory = sqlite3.Row
+        token = _temporary_db.set(conn)
+        try:
+            init_db()
+            yield conn
+        finally:
+            _temporary_db.reset(token)
 
 
 EVENT_COLS = "id,title,start,end,location,participants,description"
@@ -58,7 +84,8 @@ def _event_rows(seed: dict) -> list[tuple]:
 
 def init_db() -> None:
     """Create tables and seed events from the persona calendar (idempotent)."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _temporary_db.get() is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS events (
@@ -201,7 +228,7 @@ def _ensure_db() -> None:
     """Set up + seed the DB on first tool use (not at import, so importing this
     module stays side-effect-free — e.g. under pytest with no persona assets)."""
     global _db_ready
-    if not _db_ready:
+    if _temporary_db.get() is None and not _db_ready:
         init_db()
         _db_ready = True
 
