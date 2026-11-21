@@ -2,9 +2,7 @@
 
 One env var picks the engine; the rest of the app never knows which is live:
     RETRIEVAL_BACKEND=paradedb   uv run ...
-Default is `sqlite`: it won the A/B (2026-11-20) on every deterministic axis —
-hit@5 97.1% vs 94.1%, retrieval 36ms vs 43ms, 0 vs 127 MiB idle memory — so the
-app runs on it with no Docker. ParadeDB stays behind the seam as the scale-out
+The default `sqlite` backend runs in-process without Docker. ParadeDB stays behind the seam as the scale-out
 path (hosted/large corpus). Backend modules are imported lazily (inside
 get_backend) so neither can trigger a circular import while `rag` is still loading.
 """

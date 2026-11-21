@@ -1,10 +1,33 @@
-This is a personal project where I will be building a complete AI architecture for a personal assistant using open weights plus propietary models like Claude upon need. The focus of this project will be to prioratize privacy and balance it against local and cloud LLMs.
+# Local-first personal assistant
 
-One can use this repo to gradually learn Applied AI by building
+I’m learning applied AI engineering by building a personal assistant. The current prototype runs chat, file search, and an approval-gated calendar and reminder agent on Ollama and SQLite. The CLI and Gradio UI share the same turn logic and write local traces. Claude is available as an explicit escalation.
+
+## Run locally
+
+Start Ollama and pull the models you’re missing. Run the setup from the repo root with `uv` installed.
+
+```sh
+ollama pull qwen3.5:9b
+ollama pull nomic-embed-text
+uv sync --locked
+uv run assistant-gui
+```
+
+Upload a PDF, Markdown, or text file to index it, then ask a specific question about it. The CLI is available with `uv run assistant`. To send a turn to Claude, use `/claude <message>` in the GUI or `/escalate` before your next CLI message. Local use works without an Anthropic API key.
+
+The checked-out code provides the app. The persona fixtures, prepared index, and saved eval runs live under the git-ignored `data/` directory in the learning workspace. If you have those fixtures, index the demo corpus with:
+
+```sh
+uv run python -m assistant.ingest_folder data/assets/persona/files data/assets/persona/documents
+```
+
+The agent seeds its demo calendar when the fixture is available. `uv run evals --agent` uses the local task and calendar fixtures and runs each task in its own in-memory database.
+
+## Earlier project notes
 
 project 0: simple api call to local model running in Ollama
 
-project 1: duo-model chat assistant that can talk with you and answer questions. Model toggeling is manual using /model-name.
+project 1: streaming model gateway for local and cloud chat. The current escalation commands are in the setup instructions above.
 
 project 2: quick decisions with confidence - basically, how do you know the category (action, fact, chat, reason) and confidence of the classification of a request accurately via the local model?
 
