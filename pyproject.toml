@@ -37,6 +37,7 @@ build-backend = "uv_build"
 dev = [
     "datasets>=5.1.0",
     "gradio>=6.31.0",
+    "playwright>=1.65.2",
     "pytest>=9.1.1",
     "ruff>=0.17.2",
 ]

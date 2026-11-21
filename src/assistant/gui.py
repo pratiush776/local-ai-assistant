@@ -32,18 +32,28 @@ footer { display: none !important; }
     font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .block, .form, .wrap { background: transparent !important; border: none !important;
     box-shadow: none !important; }
+/* left column flexes to fill the width the fixed-width rail leaves */
+#maincol { flex: 1 1 0 !important; min-width: 0 !important; }
+/* chat: fixed viewport-based height that leaves room for the composer; scrolls
+   INTERNALLY so content never pushes the input off-screen */
 #chat { background: #fdfcfa !important; border: 1px solid #e7e2d9 !important;
-    border-radius: 14px !important; }
+    border-radius: 14px !important; height: calc(100vh - 214px) !important; }
 #chat .icon-button-wrapper, #chat .message-buttons, #chat button[aria-label],
 #chat .icon-buttons { display: none !important; }
-#msgbox { margin-bottom: 16px; }
+/* fixed-height bottom slot: holds the input OR the Approve/Deny row, never reflows */
+#composer { height: 88px; margin-bottom: 16px; }
+#composer #msgbox { margin-bottom: 0; }
+#approvalbar { gap: 10px; }
+#approvalbar button { min-height: 46px; }
 #newchat { max-width: 110px; }
 #newchat button { background: transparent !important; border: 1px solid #ddd6c9 !important;
     border-radius: 10px !important; color: #15130f !important; font-size: 12px !important;
     padding: 3px 12px !important; min-width: 0 !important; }
-#rail { border-left: 1px solid #e7e2d9; padding-left: 18px; }
-#content, #flow { max-height: 78vh; overflow-y: auto; font-size: 13.5px;
-    line-height: 1.5; padding-right: 8px; }
+/* right rail: fixed width, pinned to the right boundary (does not grow) */
+#rail { border-left: 1px solid #e7e2d9; padding-left: 18px; flex: 0 0 360px !important; }
+/* each rail tab panel scrolls internally when its content exceeds the viewport */
+#rail .tabitem { max-height: calc(100vh - 96px); overflow-y: auto; padding-right: 6px; }
+#content, #flow { font-size: 13.5px; line-height: 1.5; padding-right: 8px; }
 button.primary { background: #15130f !important; color: #faf8f4 !important; }
 """
 
@@ -230,6 +240,12 @@ def _ask_frame(ctx, pause, clean, turn_cites):
     ctx["flow"].append(
         f"**⏸ approve** `{pause.text}`(`{pause.data.get('args', {})}`)**?**"
     )
+    # Signal the pause in the chat itself, not just the Flow tab: the bubble
+    # otherwise stays on "Working on it…" and reads as stuck.
+    ctx["display"][-1]["content"] = (
+        f"⏸ **Approval needed.** I'd like to run `{pause.text}` with "
+        f"`{pause.data.get('args', {})}`.\n\nClick **✓ Approve** or **✗ Deny** below."
+    )
     pending = {
         "state": pause.data["state"],
         "name": pause.text,
@@ -351,6 +367,40 @@ def deny_click(pending):
     yield from resume_fn(False, pending)
 
 
+APPROVAL_MARK = "Approval needed"
+
+
+def _msg_text(msg) -> str:
+    """Extract the text of a chatbot message, tolerating Gradio's content shapes
+    (a plain str, or a list of {'text': ...} parts)."""
+    if not isinstance(msg, dict):
+        return ""
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(
+            str(p.get("text", "")) if isinstance(p, dict) else str(p) for p in c
+        )
+    return str(c or "")
+
+
+def _reveal_approval(chat_history):
+    """While a write is pending, swap the message box for the Approve/Deny buttons
+    — they are mutually exclusive (you are either typing or deciding), and hiding
+    the input also stops a stray message from dropping the pending approval. Runs
+    as a discrete `.then()`: a visibility change does NOT render when it rides on a
+    streaming generator's final frame (Gradio 6), but a plain event returning
+    component instances does. Reads the chatbot (whose updates DO land) to decide."""
+    last = _msg_text(chat_history[-1]) if chat_history else ""
+    pending = APPROVAL_MARK in last
+    return (
+        gr.update(visible=not pending),  # message box: hidden while deciding
+        gr.Button(visible=pending),  # ✓ Approve
+        gr.Button(visible=pending),  # ✗ Deny
+    )
+
+
 def clear_all():
     nav = [("files", None)]
     empty = {"ids": [], "texts": []}
@@ -410,25 +460,28 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     pending_state = gr.State(None)  # a paused action turn awaiting Approve/Deny
 
     with gr.Row(equal_height=False):
-        with gr.Column(scale=3):
+        with gr.Column(scale=1, elem_id="maincol"):
             with gr.Row():
                 clear_btn = gr.Button("New chat", scale=0, size="sm", elem_id="newchat")
-            chatbot = gr.Chatbot(
-                height="82vh", elem_id="chat", show_label=False, autoscroll=True
-            )
-            msg = gr.MultimodalTextbox(
-                show_label=False,
-                elem_id="msgbox",
-                placeholder="Message   ·   /claude to ask Claude   ·   drop a file to remember it",
-                file_types=[".pdf", ".md", ".txt"],
-                submit_btn=True,
-            )
-            with gr.Row(elem_id="approvalbar"):
-                approve_btn = gr.Button(
-                    "✓ Approve", variant="primary", visible=False, scale=1
+            chatbot = gr.Chatbot(elem_id="chat", show_label=False, autoscroll=True)
+            # One fixed-height bottom slot: the full-width input OR the Approve/Deny
+            # row occupies it, swapped by _reveal_approval — same spot, no reflow.
+            with gr.Column(elem_id="composer"):
+                msg = gr.MultimodalTextbox(
+                    show_label=False,
+                    elem_id="msgbox",
+                    placeholder="Message   ·   /claude to ask Claude   ·   drop a file to remember it",
+                    file_types=[".pdf", ".md", ".txt"],
+                    submit_btn=True,
                 )
-                deny_btn = gr.Button("✗ Deny", variant="stop", visible=False, scale=1)
-        with gr.Column(scale=2, min_width=320, elem_id="rail"):
+                with gr.Row(elem_id="approvalbar"):
+                    approve_btn = gr.Button(
+                        "✓ Approve", variant="primary", visible=False, scale=1
+                    )
+                    deny_btn = gr.Button(
+                        "✗ Deny", variant="stop", visible=False, scale=1
+                    )
+        with gr.Column(scale=0, min_width=360, elem_id="rail"):
             with gr.Tabs() as rail_tabs:
                 with gr.Tab("Memory", id="memory"):
                     with gr.Row():
@@ -517,9 +570,14 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
         [msg, chatbot, clean_state, cite_state, turn_cites_state, pending_state],
         chat_out,
     )
-    sub.then(_render, [nav_state, cite_state], render_out)
-    approve_btn.click(approve_click, [pending_state], chat_out)
-    deny_btn.click(deny_click, [pending_state], chat_out)
+    # Reveal/hide the Approve/Deny buttons as a discrete event (see _reveal_approval):
+    # a Button visibility change does not render from a streaming generator's final
+    # frame in Gradio 6, so a plain .then returning gr.Button instances does it,
+    # reading the chatbot (which DOES update from the generator) to decide.
+    reveal = (_reveal_approval, [chatbot], [msg, approve_btn, deny_btn])
+    sub.then(_render, [nav_state, cite_state], render_out).then(*reveal)
+    approve_btn.click(approve_click, [pending_state], chat_out).then(*reveal)
+    deny_btn.click(deny_click, [pending_state], chat_out).then(*reveal)
 
     chatbot.select(
         open_sources,
