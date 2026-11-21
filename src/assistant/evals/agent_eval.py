@@ -71,8 +71,9 @@ def _tool_stats(events: list) -> tuple[int, int]:
     return valid, len(names)
 
 
-def run_task(task: dict) -> dict:
-    """Run and score one task against a disposable database."""
+def run_task(task: dict, driver=drive) -> dict:
+    """Run and score one task against a disposable database. `driver` is the agent
+    under test — the hand-written loop (default) or agent_pydantic.drive (6.6)."""
     if not tools.CALENDAR_SEED.is_file():
         raise FileNotFoundError(tools.CALENDAR_SEED)
     with tools.temporary_database() as conn:
@@ -81,7 +82,7 @@ def run_task(task: dict) -> dict:
                 "INSERT INTO reminders (text,date) VALUES (?,?)", SEED_REMINDER
             )
         t0 = time.perf_counter()
-        events = drive(task["task"])
+        events = driver(task["task"])
         latency_s = time.perf_counter() - t0
 
         answer = next((e.text for e in reversed(events) if e.kind == "done"), "")
@@ -144,12 +145,21 @@ def print_scoreboard(s: dict, results: list[dict]) -> None:
     print("=" * 60)
 
 
-def run(limit: int | None = None) -> None:
+def run(limit: int | None = None, framework: bool = False) -> None:
     tasks = load_tasks()[:limit] if limit else load_tasks()
-    print(f"Running {len(tasks)} agent tasks…")
+    driver, label, tag = drive, "hand-written loop (agent.py)", "ours"
+    if framework:
+        from .. import agent_pydantic
+
+        driver, label, tag = (
+            agent_pydantic.drive,
+            "Pydantic AI (agent_pydantic.py)",
+            "pai",
+        )
+    print(f"Running {len(tasks)} agent tasks via {label}…")
     results = []
     for i, task in enumerate(tasks, 1):
-        r = run_task(task)
+        r = run_task(task, driver)
         results.append(r)
         mark = "ok  " if r["passed"] else "FAIL"
         print(f"  [{i:2}/{len(tasks)}] {mark} {r['id']:5} {r['task'][:45]}", flush=True)
@@ -157,7 +167,7 @@ def run(limit: int | None = None) -> None:
     s = score(results)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = OUT_DIR / f"agent-run-{stamp}.json"
+    out = OUT_DIR / f"agent-run-{tag}-{stamp}.json"
     out.write_text(json.dumps({"ts": stamp, "score": s, "results": results}, indent=2))
     print_scoreboard(s, results)
     print(f"\nSaved {out}")

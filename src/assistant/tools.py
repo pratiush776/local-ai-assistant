@@ -51,8 +51,12 @@ def _db() -> Iterator[sqlite3.Connection]:
 
 @contextmanager
 def temporary_database() -> Iterator[sqlite3.Connection]:
-    """Give tool calls in this context a fresh, seeded SQLite database."""
-    with closing(sqlite3.connect(":memory:")) as conn:
+    """Give tool calls in this context a fresh, seeded SQLite database.
+
+    check_same_thread=False: a framework agent (agent_pydantic.py) runs sync tools
+    in a worker thread, so this one connection is touched from more than one thread.
+    Access stays sequential (one tool call at a time), so sharing it is safe here."""
+    with closing(sqlite3.connect(":memory:", check_same_thread=False)) as conn:
         conn.row_factory = sqlite3.Row
         token = _temporary_db.set(conn)
         try:

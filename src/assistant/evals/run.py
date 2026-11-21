@@ -311,7 +311,7 @@ def main() -> None:
             if "--limit" in sys.argv
             else None
         )
-        agent_eval.run(lim)
+        agent_eval.run(lim, framework="--framework" in sys.argv)
         return
     if "--label" in sys.argv:
         label_rows()
