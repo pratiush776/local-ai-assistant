@@ -101,8 +101,9 @@ def list_reminders() -> str:
 
 
 # --- write tools: the approval gate, now one declarative flag -----------------
-# `requires_approval=True` IS our WRITE_TOOLS membership + needs_approval(), moved
-# onto the tool itself. The framework stops the run before these ever execute.
+# `requires_approval=True` is the framework's version of our read_only_hint annotation
+# + needs_approval(): risk declared on the tool. The framework stops the run before
+# these ever execute.
 @agent.tool_plain(requires_approval=True)
 def add_event(
     title: str, date: str, time: str = "09:00", duration_min: int = 60

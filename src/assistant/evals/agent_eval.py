@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import agent, tools
+from .. import agent, mcp_client, tools
 from ..trace import capture
 from .agent_checks import CHECKS
 from .stats import wilson
@@ -39,7 +39,7 @@ def load_tasks() -> list[dict]:
 
 def drive(task_text: str) -> list:
     """Run one task to completion, auto-approving every write. Returns all events."""
-    events, gen = [], agent.run_agent(task_text, [], tools.TOOL_SCHEMAS)
+    events, gen = [], agent.run_agent(task_text, [], mcp_client.SCHEMAS)
     while True:
         pending = None
         for e in gen:
@@ -54,7 +54,7 @@ def drive(task_text: str) -> list:
             pending.text,
             pending.data["args"],
             True,
-            tools.TOOL_SCHEMAS,
+            mcp_client.SCHEMAS,
         )
 
 

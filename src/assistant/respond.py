@@ -135,10 +135,10 @@ def respond_resume(
 ) -> Iterator[Event]:
     """Continue an action turn after a human approved/denied a write. The surface
     (CLI/GUI) calls this with the approval_request's data once it has the answer."""
-    from assistant import agent, tools
+    from assistant import agent, mcp_client
 
     answer = yield from _drive_agent(
-        agent.resume_agent(state, name, args, approved, tools.TOOL_SCHEMAS)
+        agent.resume_agent(state, name, args, approved, mcp_client.SCHEMAS)
     )
     if answer is not None:  # None => another write needs approval
         yield Event(
@@ -282,11 +282,11 @@ def respond(
 
     # ---- action: hand off to the agent loop (tools + approval) ----
     if label == "action":
-        from assistant import agent, tools  # local import avoids a circular import
+        from assistant import agent, mcp_client  # local import avoids a circular import
 
         yield Event("status", "Working on it…")
         answer = yield from _drive_agent(
-            agent.run_agent(user_msg, history, tools.TOOL_SCHEMAS)
+            agent.run_agent(user_msg, history, mcp_client.SCHEMAS)
         )
         if answer is not None:  # None => paused for approval; the surface will resume
             timings["total_ms"] = round((time.perf_counter() - t0) * 1000)

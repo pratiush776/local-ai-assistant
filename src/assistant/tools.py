@@ -11,7 +11,10 @@ Every tool reads "now" from PERSONA_TODAY — Emma's world is frozen at 2024-05-
 Contract agent.py depends on:
   TOOL_SCHEMAS : list[dict]        # the tool menu sent to the model
   run_tool(name, args) -> str      # execute one tool, return text; may raise
-  WRITE_TOOLS  : set[str]          # which tools change state (approval gate, 6.3)
+
+Each schema carries its own risk in an "annotations" block ({"read_only_hint": bool}),
+the standard MCP vocabulary. mcp_client reads it to decide approval; a tool is gated
+unless it declared itself read-only. No separate write-tool set.
 """
 
 import datetime as dt
@@ -30,7 +33,6 @@ DB_PATH = Path("data/assistant.db")
 CALENDAR_SEED = Path("data/assets/persona/calendar.json")
 FILES_INDEX = Path("data/assets/persona/files_index.json")
 
-WRITE_TOOLS: set[str] = {"add_event", "add_reminder"}
 _temporary_db: ContextVar[sqlite3.Connection | None] = ContextVar(
     "temporary_db", default=None
 )
@@ -260,6 +262,7 @@ def _s(desc: str) -> dict:
 TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
+        "annotations": {"read_only_hint": True},
         "function": {
             "name": "search_files",
             "description": "Search the user's personal files and return matching passages. "
@@ -273,6 +276,7 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "type": "function",
+        "annotations": {"read_only_hint": True},
         "function": {
             "name": "read_file",
             "description": "given one known filename, returns that file's full text",
@@ -285,6 +289,7 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "type": "function",
+        "annotations": {"read_only_hint": True},
         "function": {
             "name": "list_events",
             "description": "List the user's calendar events on a specific date.",
@@ -299,6 +304,7 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "type": "function",
+        "annotations": {"read_only_hint": True},
         "function": {
             "name": "find_event",
             "description": "Find calendar events by title or keyword across ALL dates. "
@@ -317,6 +323,7 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "type": "function",
+        "annotations": {"read_only_hint": False},  # writes state -> needs approval
         "function": {
             "name": "add_event",
             "description": "Add an event to the user's calendar. Use when the user asks to "

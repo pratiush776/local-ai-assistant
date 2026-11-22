@@ -10,7 +10,7 @@ from collections.abc import Iterator
 
 import httpx
 
-from assistant import tools
+from assistant import mcp_client, tools
 from assistant.ollama import OLLAMA_URL
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
@@ -43,8 +43,11 @@ def _chat(messages: list[dict], tool_schemas: list[dict]) -> dict:
 
 
 def _execute(name: str, args: dict) -> str:
-    """Run one tool, turning any failure into a result string (errors-as-results)."""
+    """Run one tool, turning any failure into a result string (errors-as-results).
+    MCP-backed tools go through the MCP client; the rest call tools.py directly."""
     try:
+        if name in mcp_client.MCP_TOOL_NAMES:
+            return mcp_client.run(name, args)
         return tools.run_tool(name, args)
     except Exception as e:  # noqa: BLE001 — ANY failure goes back to the model
         return f"Error: {e}"
@@ -130,7 +133,8 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
 
 
 def needs_approval(name: str) -> bool:
-    return name in tools.WRITE_TOOLS
+    # Risk rides on each tool (its read_only_hint annotation); the client reads it.
+    return mcp_client.needs_approval(name)
 
 
 def resume_agent(
