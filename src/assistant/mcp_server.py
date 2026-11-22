@@ -22,6 +22,26 @@ def add_reminder(text: str, date: str) -> str:
     return tools.run_tool("add_reminder", {"text": text, "date": date})
 
 
+# --- block 2b: the mailbox, read-only (7.2). Same plug, more tools. ---
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+def search_emails(query: str) -> str:
+    """Search the mailbox by keyword across subject and body; returns matching
+    emails (with their full bodies), newest-first."""
+    return tools.run_tool("search_emails", {"query": query})
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+def get_unread_emails() -> str:
+    """List all of the user's unread emails, newest-first."""
+    return tools.run_tool("get_unread_emails", {})
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+def get_email(email_id: str) -> str:
+    """Retrieve one full email by its id from the user's mailbox."""
+    return tools.run_tool("get_email", {"email_id": email_id})
+
+
 # --- block 3: run over stdio when executed as a script ---
 if __name__ == "__main__":
     mcp.run()

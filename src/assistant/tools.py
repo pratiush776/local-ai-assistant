@@ -32,6 +32,7 @@ PERSONA_TODAY = "2024-05-15"
 DB_PATH = Path("data/assistant.db")
 CALENDAR_SEED = Path("data/assets/persona/calendar.json")
 FILES_INDEX = Path("data/assets/persona/files_index.json")
+INBOX = Path("data/assets/persona/inbox.json")  # Emma's mailbox (read-only in 7.2)
 
 _temporary_db: ContextVar[sqlite3.Connection | None] = ContextVar(
     "temporary_db", default=None
@@ -214,6 +215,54 @@ def _add_reminder(text: str, date: str) -> str:
     return f"Reminder set for {date}: {text}"
 
 
+# --- email (read-only, 7.2) --------------------------------------------------
+# The "account" is one JSON file here; in a real deployment an OAuth token would
+# identify which mailbox these tools read. The tools expose `body`, never the
+# `raw_body`/`injection_slots` fields (that poisoned text is 7.4's problem).
+@lru_cache(maxsize=1)
+def _inbox() -> list[dict]:
+    return json.loads(INBOX.read_text())["emails"]
+
+
+def _fmt_email(e: dict) -> str:
+    """One email as the model sees it: a header line + the full body."""
+    return (
+        f"[{e['id']}] {e['timestamp']}  from: {e['sender']}  —  {e['subject']}\n"
+        f"{e['body']}"
+    )
+
+
+def _search_emails(query: str) -> str:
+    """Case-insensitive keyword match across subject AND body, newest-first.
+    Returns full bodies (the inbox is small), so one search answers most tasks."""
+    q = query.lower()
+    hits = [e for e in _inbox() if q in e["subject"].lower() or q in e["body"].lower()]
+    hits.sort(key=lambda e: e["timestamp"], reverse=True)
+    if not hits:
+        return f"No emails match '{query}'."
+    return "\n\n".join(_fmt_email(e) for e in hits)
+
+
+def _get_unread_emails() -> str:
+    """Every email with read == False, newest-first."""
+    unread = sorted(
+        (e for e in _inbox() if not e["read"]),
+        key=lambda e: e["timestamp"],
+        reverse=True,
+    )
+    if not unread:
+        return "No unread emails."
+    return "\n\n".join(_fmt_email(e) for e in unread)
+
+
+def _get_email(email_id: str) -> str:
+    """One full email by id (ids are strings like '20'; coerce so '20'/20 both work)."""
+    for e in _inbox():
+        if str(e["id"]) == str(email_id):
+            return _fmt_email(e)
+    return f"No email with id '{email_id}'."
+
+
 _BODIES = {
     "search_files": lambda a: _search_files(a["query"]),
     "read_file": lambda a: _read_file(a["filename"]),
@@ -224,6 +273,9 @@ _BODIES = {
     ),
     "list_reminders": lambda a: _list_reminders(),
     "add_reminder": lambda a: _add_reminder(a["text"], a["date"]),
+    "search_emails": lambda a: _search_emails(a["query"]),
+    "get_unread_emails": lambda a: _get_unread_emails(),
+    "get_email": lambda a: _get_email(a["email_id"]),
 }
 
 
