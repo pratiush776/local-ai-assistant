@@ -8,6 +8,11 @@ Three layers, used by agent.py (b, d) and tools.py (c):
   b  wrap_untrusted      — fence a read-tool result so the model is told it is data
   c  recipient_allowed   — send_email refuses a non-contact recipient (in the body)
   d  (the loop)          — no outbound tool to a non-contact once the run is tainted
+
+Layers c and d only refuse a NON-contact recipient. A tainted send to a KNOWN
+contact is still a possible exfiltration, so exfil_warning() forces it to human
+approval with a loud banner rather than blocking it — a real reply/forward must
+stay possible, so here the human decides, warned.
 """
 
 import json
@@ -110,6 +115,31 @@ def check_call(name: str, args: dict, *, tainted: bool) -> str | None:
         reason = policy(name, args, tainted)
         if reason is not None:
             return reason
+    return None
+
+
+# The contact-exfil gap: layers c/d refuse an outbound call only to a NON-contact.
+# A tainted run sending to a KNOWN CONTACT slips past both — a plausible "send a copy
+# to <a real colleague>" injection. That send still goes to human approval (it is a
+# write), but a hurried approver has no cue the run read a stranger's words. So a
+# tainted outbound is never blocked here (a real reply/forward must stay possible) —
+# instead it is forced to approval and the approval carries this loud banner. The
+# human decides; the warning makes sure they decide with the one fact that matters.
+TAINT_WARNING = (
+    "⚠ This run read untrusted (stranger-written) content before this send. "
+    "Confirm the recipient and the contents are what you intend."
+)
+
+
+def exfil_warning(name: str, *, tainted: bool) -> str | None:
+    """Advisory (not a block) for an outbound send on a tainted run. Returns the
+    banner the approval screen must show, or None when no warning is warranted.
+
+    Content-blind and recipient-blind: it fires for ANY outbound tool once the run
+    is tainted, contacts included — a contact is exactly the recipient layers c/d
+    wave through, so it is where the human cue is needed most."""
+    if tainted and name in OUTBOUND_TOOLS:
+        return TAINT_WARNING
     return None
 
 

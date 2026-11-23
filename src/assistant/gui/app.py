@@ -246,7 +246,12 @@ def _ask_frame(ctx, pause, clean, turn_cites):
     # chat; the Approve/Deny buttons sit in a separate fixed row, so a long body
     # can't push them off-screen.
     args = pause.data.get("args", {})
-    payload = format_approval(pause.text, args, mcp_client.describe(pause.text))
+    payload = format_approval(
+        pause.text,
+        args,
+        mcp_client.describe(pause.text),
+        warnings=pause.data.get("warnings"),
+    )
     ctx["flow"].append(f"**⏸ approve `{pause.text}`?**")
     # Signal the pause in the chat itself, not just the Flow tab: the bubble
     # otherwise stays on "Working on it…" and reads as stuck.
@@ -259,6 +264,7 @@ def _ask_frame(ctx, pause, clean, turn_cites):
         "state": pause.data["state"],
         "name": pause.text,
         "args": pause.data["args"],
+        "tainted": pause.data.get("tainted", False),  # carried so resume stays tainted
         "ctx": ctx,
         "clean": clean,
         "turn_cites": turn_cites,
@@ -357,7 +363,11 @@ def resume_fn(approved: bool, pending):
         return
     ctx = pending["ctx"]
     stream = respond_resume(
-        pending["state"], pending["name"], pending["args"], approved
+        pending["state"],
+        pending["name"],
+        pending["args"],
+        approved,
+        tainted=pending.get("tainted", False),
     )
     pause = yield from _stream_frames(
         stream, ctx, pending["clean"], pending["turn_cites"]

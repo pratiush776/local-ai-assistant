@@ -57,6 +57,7 @@ def drive(task_text: str) -> list:
             pending.data["args"],
             True,
             mcp_client.SCHEMAS,
+            tainted=pending.data.get("tainted", False),
         )
 
 

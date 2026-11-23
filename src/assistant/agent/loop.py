@@ -81,10 +81,14 @@ def run_agent(
     yield from _loop(messages, tool_schemas)
 
 
-def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
-    """The shared loop. Both run_agent and resume_agent drive this."""
+def _loop(
+    messages: list[dict], tool_schemas: list[dict], *, tainted: bool = False
+) -> Iterator[Event]:
+    """The shared loop. Both run_agent and resume_agent drive this. `tainted` is
+    seeded by the caller so a run RESUMED after approval stays tainted (it is carried
+    in the approval state); a fresh run starts untainted."""
     seen: set[tuple[str, str]] = set()  # (name, args) signatures already run
-    tainted = False  # has this run read untrusted (stranger-written) content yet?
+    # has this run read untrusted (stranger-written) content yet?  (may arrive True)
     deadline = time.monotonic() + MAX_SECONDS
 
     for step in range(MAX_STEPS):
@@ -120,11 +124,20 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
                 yield from _record_call(messages, name, args, blocked)
                 continue
 
-            if needs_approval(name):
+            # Contact-exfil guard: a tainted outbound send is NOT auto-run even if a
+            # policy would allow it (a contact recipient). It is forced to approval
+            # and the request carries a loud banner so the human decides, warned.
+            warning = security.exfil_warning(name, tainted=tainted)
+            if needs_approval(name) or warning is not None:
                 yield Event(
                     "approval_request",
                     text=name,
-                    data={"args": args, "state": messages},
+                    data={
+                        "args": args,
+                        "state": messages,
+                        "tainted": tainted,  # carried so a resumed run stays tainted
+                        "warnings": [warning] if warning else [],
+                    },
                 )
                 return
 
@@ -154,7 +167,12 @@ def needs_approval(name: str) -> bool:
     return mcp_client.needs_approval(name)
 
 
-def format_approval(name: str, args: dict, description: str | None = None) -> str:
+def format_approval(
+    name: str,
+    args: dict,
+    description: str | None = None,
+    warnings: list[str] | None = None,
+) -> str:
     """Render a pending write as the exact payload the user approves (WYSIWYS):
     the REAL argument values, never a paraphrase — this view is the authorization.
 
@@ -165,8 +183,14 @@ def format_approval(name: str, args: dict, description: str | None = None) -> st
 
     `description` is the tool's own menu description — helpful context, shown as a
     subordinate line. It is tool/server-provided text (untrusted for a foreign
-    server), so it never replaces the args: the args remain what is authorized."""
-    lines = [f"Action: {name}"]
+    server), so it never replaces the args: the args remain what is authorized.
+
+    `warnings` are host advisories (e.g. the contact-exfil taint banner). They ride
+    at the TOP, above the action, so the human sees the risk before the payload."""
+    lines: list[str] = list(warnings or [])
+    if lines:
+        lines.append("")  # blank line separating the banner from the payload
+    lines.append(f"Action: {name}")
     if description:
         lines.append(f"  ({description.strip()})")
     for key, value in args.items():
@@ -179,12 +203,20 @@ def format_approval(name: str, args: dict, description: str | None = None) -> st
     
 
 def resume_agent(
-    state: list[dict], name: str, args: dict, approved: bool, tool_schemas: list[dict]
+    state: list[dict],
+    name: str,
+    args: dict,
+    approved: bool,
+    tool_schemas: list[dict],
+    *,
+    tainted: bool = False,
 ) -> Iterator[Event]:
     """Continue a run that paused for approval. `state` is the saved messages list;
-    `name`/`args` are the write that was waiting (read off the approval_request event)."""
+    `name`/`args` are the write that was waiting (read off the approval_request event).
+    `tainted` comes from that same approval event's data, so a run that read untrusted
+    content before pausing stays tainted after it resumes (a reset would forget it)."""
     # Approve and deny differ only in the result string; both flow through the
     # same record-then-continue path.
     result = _execute(name, args) if approved else f"The user declined to run '{name}'."
     yield from _record_call(state, name, args, result)
-    yield from _loop(state, tool_schemas)
+    yield from _loop(state, tool_schemas, tainted=tainted)

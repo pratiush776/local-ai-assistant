@@ -81,7 +81,11 @@ def chat() -> None:
                 ).strip().lower() in ("y", "yes")
                 pause = _consume(
                     respond_resume(
-                        pause.data["state"], pause.text, pause.data["args"], ok
+                        pause.data["state"],
+                        pause.text,
+                        pause.data["args"],
+                        ok,
+                        tainted=pause.data.get("tainted", False),
                     ),
                     events,
                     state,

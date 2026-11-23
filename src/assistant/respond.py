@@ -131,15 +131,23 @@ def _drive_agent(gen: Iterator[Event]) -> Iterator[Event]:
 
 
 def respond_resume(
-    state: list[dict], name: str, args: dict, approved: bool
+    state: list[dict],
+    name: str,
+    args: dict,
+    approved: bool,
+    *,
+    tainted: bool = False,
 ) -> Iterator[Event]:
     """Continue an action turn after a human approved/denied a write. The surface
-    (CLI/GUI) calls this with the approval_request's data once it has the answer."""
+    (CLI/GUI) calls this with the approval_request's data once it has the answer.
+    `tainted` rides from that same approval data so the resumed run stays tainted."""
     from assistant import agent
     from assistant.mcp import client as mcp_client
 
     answer = yield from _drive_agent(
-        agent.resume_agent(state, name, args, approved, mcp_client.SCHEMAS)
+        agent.resume_agent(
+            state, name, args, approved, mcp_client.SCHEMAS, tainted=tainted
+        )
     )
     if answer is not None:  # None => another write needs approval
         yield Event(
