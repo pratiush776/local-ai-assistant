@@ -32,5 +32,14 @@ CLAUDE.local.md
 .claude/
 
 # Project 2 exam data and experiments (kept local)
-data/
+data/*
+# ...except the small public-benchmark persona fixtures the CI tests read
+# (AgentDojo-derived; see tests/test_email_tools.py). Carve a path down to them.
+!data/assets/
+data/assets/*
+!data/assets/persona/
+data/assets/persona/*
+!data/assets/persona/inbox.json
+!data/assets/persona/calendar.json
+!data/assets/persona/files_index.json
 experiments/project-2/
