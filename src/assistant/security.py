@@ -69,6 +69,50 @@ def recipient_allowed(name: str, args: dict) -> bool:
     return all(addr in contacts for addr in outbound_recipients(name, args))
 
 
+# --- the policy layer: ONE interception point for every tool call -------------
+# The host (not the tool, not the MCP server) decides whether a call may run. This
+# is the shape OpenAI Agents-SDK guardrails and LangGraph interrupts formalize: a
+# registry of checks at the model->tool boundary. A policy returns a block reason
+# (a "Blocked: …" string) to refuse, or None to allow. Adding a risky tool is
+# covered by the CATEGORY policies below (OUTBOUND_TOOLS); only its field adapter
+# in outbound_recipients() is tool-specific. Adding a RULE is one new function here.
+
+
+def _allowlist_policy(name: str, args: dict, tainted: bool) -> str | None:
+    """Layer c: an outbound call to a non-contact is refused, always."""
+    if LAYER_C and name in OUTBOUND_TOOLS and not recipient_allowed(name, args):
+        to = ", ".join(outbound_recipients(name, args)) or "that address"
+        return (
+            f"Blocked: '{to}' is not on the user's contacts, so '{name}' was refused "
+            "without sending. The user must confirm an unknown recipient."
+        )
+    return None
+
+
+def _taint_policy(name: str, args: dict, tainted: bool) -> str | None:
+    """Layer d: once the run has read untrusted content, an outbound call to a
+    non-contact is refused even if the allowlist layer is off (content-blind)."""
+    if LAYER_D and tainted and name in OUTBOUND_TOOLS and not recipient_allowed(name, args):
+        return (
+            f"Blocked: injection defence — this run has read untrusted content, so "
+            f"'{name}' to a non-contact recipient was refused without sending."
+        )
+    return None
+
+
+POLICIES = [_allowlist_policy, _taint_policy]
+
+
+def check_call(name: str, args: dict, *, tainted: bool) -> str | None:
+    """Run every policy against a pending tool call. Returns the first block reason,
+    or None if all allow. Called by the agent loop BEFORE approval/execution."""
+    for policy in POLICIES:
+        reason = policy(name, args, tainted)
+        if reason is not None:
+            return reason
+    return None
+
+
 def wrap_untrusted(name: str, result: str) -> str:
     """Layer b: fence a read-tool result as untrusted data. The nonce is random so a
     poisoned payload can't forge the closing tag and 'break out' of the fence."""

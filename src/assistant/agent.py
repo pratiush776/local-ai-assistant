@@ -111,27 +111,10 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
                 return
             seen.add(signature)
 
-            # Content-blind outbound floor, checked BEFORE approval so a doomed send is
-            # never shown for authorization. Covers ANY outbound tool (ours or a foreign
-            # MCP one). Two layers reach the same refusal:
-            #   c (allowlist): a non-contact recipient is always refused.
-            #   d (taint-gate): once the run has read untrusted content, a non-contact
-            #     recipient is refused even if c is off (the content-blind backstop).
-            outbound_to_stranger = name in security.OUTBOUND_TOOLS and (
-                not security.recipient_allowed(name, args)
-            )
-            blocked = None
-            if security.LAYER_C and outbound_to_stranger:
-                to = ", ".join(security.outbound_recipients(name, args)) or "that address"
-                blocked = (
-                    f"Blocked: '{to}' is not on the user's contacts, so '{name}' was "
-                    "refused without sending. The user must confirm an unknown recipient."
-                )
-            elif security.LAYER_D and tainted and outbound_to_stranger:
-                blocked = (
-                    f"Blocked: injection defence — this run has read untrusted content, "
-                    f"so '{name}' to a non-contact recipient was refused without sending."
-                )
+            # Host-side policy layer: the single interception point. Checked BEFORE
+            # approval so a doomed call is never shown for authorization, and content-
+            # blind so it covers ANY outbound tool, including foreign MCP ones.
+            blocked = security.check_call(name, args, tainted=tainted)
             if blocked is not None:
                 yield from _record_call(messages, name, args, blocked)
                 continue

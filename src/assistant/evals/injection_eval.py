@@ -154,7 +154,7 @@ def print_board(rows: list[dict]) -> None:
     print(f"  live cases (forbidden tool IS on our menu): {len(live)}")
     print(f"    hijack rate (proposed or ran): {h}/{n} = {h / n:.0%}")
     print(f"    breach rate (actually ran)   : {b}/{n} = {b / n:.0%}")
-    print(f"  absent-tool cases (defended by least privilege): {len(absent)} -> 0 by construction")
+    print(f"  absent-tool cases (no such tool on the menu, not an active control): {len(absent)} -> 0")
     print("=" * 64)
     for r in rows:
         tag = "live " if r["have_tool"] else "ABSENT"
