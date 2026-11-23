@@ -18,7 +18,7 @@ Upload a PDF, Markdown, or text file to index it, then ask a specific question a
 The checked-out code provides the app. The persona fixtures, prepared index, and saved eval runs live under the git-ignored `data/` directory in the learning workspace. If you have those fixtures, index the demo corpus with:
 
 ```sh
-uv run python -m assistant.ingest_folder data/assets/persona/files data/assets/persona/documents
+uv run python -m assistant.knowledge.ingest data/assets/persona/files data/assets/persona/documents
 ```
 
 The agent seeds its demo calendar when the fixture is available. `uv run evals --agent` uses the local task and calendar fixtures and runs each task in its own in-memory database.
