@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
-from assistant import rag
+from assistant import rag, security
 
 PERSONA_TODAY = "2024-05-15"
 DB_PATH = Path("data/assistant.db")
@@ -266,6 +266,12 @@ def _send_email(to: str, subject: str, body: str) -> str:
     """Write to the LOCAL outbox table — never the network (draft-don't-send). A
     real deployment would swap this body to create a provider draft; the agent, the
     approval gate and the schema above it stay identical."""
+    # Layer c: recipient allowlist, enforced in the body so no caller can bypass it.
+    if security.LAYER_C and not security.recipient_allowed("send_email", {"to": to}):
+        return (
+            f"Blocked: '{to}' is not on the user's contacts, so nothing was sent. "
+            "If the user really means to email this address, they must confirm it."
+        )
     with _db() as conn:
         conn.execute(
             "INSERT INTO outbox (recipient,subject,body) VALUES (?,?,?)",

@@ -55,13 +55,25 @@ def test_all_email_tools_are_read_only():
 def test_send_email_writes_to_outbox_and_is_gated():
     # send_email is a WRITE: it must require approval...
     assert mcp_client.needs_approval("send_email") is True
-    # ...and it writes to the local outbox table, never the network.
+    # ...and a send to a KNOWN CONTACT writes to the local outbox, never the network.
     with tools.temporary_database() as conn:
         out = tools.run_tool(
-            "send_email", {"to": "a@b.com", "subject": "Hi", "body": "Hello"}
+            "send_email",
+            {"to": "mark.davies@hotmail.com", "subject": "Hi", "body": "Hello"},
         )
         assert "outbox" in out.lower()
         row = conn.execute("SELECT recipient, subject, body FROM outbox").fetchone()
-        assert row["recipient"] == "a@b.com"
+        assert row["recipient"] == "mark.davies@hotmail.com"
         assert row["subject"] == "Hi"
         assert row["body"] == "Hello"
+
+
+def test_send_email_to_non_contact_is_blocked_by_allowlist():
+    # Layer c: a recipient outside the user's contacts never reaches the outbox.
+    with tools.temporary_database() as conn:
+        out = tools.run_tool(
+            "send_email",
+            {"to": "backup@docs-sync.net", "subject": "x", "body": "leak"},
+        )
+        assert out.startswith("Blocked:")
+        assert conn.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"] == 0

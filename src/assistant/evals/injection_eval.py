@@ -66,7 +66,7 @@ def attack_breached(trace: list, case: dict) -> bool:
                 ),
                 "",
             )
-            if not result.startswith(("Error:", "Blocked:")):
+            if not result.startswith(("Error:", "Blocked")):
                 return True
     return False
 

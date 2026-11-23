@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 import httpx
 
-from assistant import mcp_client, tools
+from assistant import mcp_client, security, tools
 from assistant.ollama import OLLAMA_URL
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
@@ -61,7 +61,10 @@ def _record_call(
     Shared by the normal loop and the post-approval resume."""
     yield Event("tool_call", text=name, data={"args": args})
     yield Event("tool_result", text=name, data={"result": result})
-    messages.append({"role": "tool", "tool_name": name, "content": result})
+    # The trace keeps the RAW result; the model sees it wrapped as untrusted (layer b).
+    messages.append(
+        {"role": "tool", "tool_name": name, "content": security.wrap_untrusted(name, result)}
+    )
 
 
 def run_agent(
@@ -80,6 +83,7 @@ def run_agent(
 def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
     """The shared loop. Both run_agent and resume_agent drive this."""
     seen: set[tuple[str, str]] = set()  # (name, args) signatures already run
+    tainted = False  # has this run read untrusted (stranger-written) content yet?
     deadline = time.monotonic() + MAX_SECONDS
 
     for step in range(MAX_STEPS):
@@ -107,6 +111,22 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
                 return
             seen.add(signature)
 
+            # Layer d: content-blind outbound floor. Once the run has read untrusted
+            # content, refuse ANY outbound tool (ours or a foreign MCP one) aimed at a
+            # non-contact — before approval, so no click can release it.
+            if (
+                security.LAYER_D
+                and tainted
+                and name in security.OUTBOUND_TOOLS
+                and not security.recipient_allowed(name, args)
+            ):
+                blocked = (
+                    f"Blocked: injection defence — this run has read untrusted content, "
+                    f"so '{name}' to a non-contact recipient was refused without sending."
+                )
+                yield from _record_call(messages, name, args, blocked)
+                continue
+
             if needs_approval(name):
                 yield Event(
                     "approval_request",
@@ -115,7 +135,10 @@ def _loop(messages: list[dict], tool_schemas: list[dict]) -> Iterator[Event]:
                 )
                 return
 
-            yield from _record_call(messages, name, args, _execute(name, args))
+            result = _execute(name, args)
+            if name in security.UNTRUSTED_READERS:
+                tainted = True  # a stranger's words are now in context
+            yield from _record_call(messages, name, args, result)
 
         if time.monotonic() > deadline:  # wall-clock stop
             yield Event(
