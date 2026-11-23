@@ -313,6 +313,11 @@ def main() -> None:
         )
         agent_eval.run(lim, framework="--framework" in sys.argv)
         return
+    if "--inject" in sys.argv:
+        from . import injection_eval
+
+        injection_eval.run()
+        return
     if "--label" in sys.argv:
         label_rows()
         return

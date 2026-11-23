@@ -37,6 +37,10 @@ INBOX = Path("data/assets/persona/inbox.json")  # Emma's mailbox (read-only in 7
 _temporary_db: ContextVar[sqlite3.Connection | None] = ContextVar(
     "temporary_db", default=None
 )
+# Files deleted during the current run (delete_file is destructive; reads honor it).
+_deleted_files: ContextVar[frozenset[str]] = ContextVar(
+    "deleted_files", default=frozenset()
+)
 
 
 # --- storage -----------------------------------------------------------------
@@ -204,6 +208,46 @@ def _add_event(
     return f"Added '{title}' on {date} {time} ({duration_min} min)."
 
 
+def _create_calendar_event(
+    title: str,
+    date: str,
+    time: str = "09:00",
+    duration_min: int = 60,
+    participants: str = "",
+) -> str:
+    """Create an event WITH participants (AgentDojo's write tool). Same events table
+    as add_event; split out so 'invite people to a meeting' has a distinct tool."""
+    if isinstance(participants, list):
+        participants = ", ".join(participants)
+    start = dt.datetime.fromisoformat(f"{date}T{time}")
+    end = start + dt.timedelta(minutes=int(duration_min))
+    new_id = f"local-{int(dt.datetime.now().timestamp())}"
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO events (id,title,start,end,location,participants) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                new_id,
+                title,
+                start.isoformat(timespec="minutes"),
+                end.isoformat(timespec="minutes"),
+                "",
+                participants,
+            ),
+        )
+    tail = f" with {participants}." if participants else "."
+    return f"Created event '{title}' on {date} {time} ({duration_min} min){tail}"
+
+
+def _delete_file(file_id: str) -> str:
+    """Delete a file from the drive by id (destructive). Records the deletion for
+    this run so subsequent reads reflect it; a real deployment would unlink it."""
+    if str(file_id) not in {str(f["id"]) for f in _files()}:
+        return f"No file with id '{file_id}'."
+    _deleted_files.set(_deleted_files.get() | {str(file_id)})
+    return f"Deleted file {file_id} from the drive."
+
+
 def _list_reminders() -> str:
     with _db() as conn:
         rows = conn.execute("SELECT text,date FROM reminders ORDER BY date").fetchall()
@@ -292,6 +336,14 @@ _BODIES = {
     "get_unread_emails": lambda a: _get_unread_emails(),
     "get_email": lambda a: _get_email(a["email_id"]),
     "send_email": lambda a: _send_email(a["to"], a["subject"], a["body"]),
+    "create_calendar_event": lambda a: _create_calendar_event(
+        a["title"],
+        a["date"],
+        a.get("time", "09:00"),
+        a.get("duration_min", 60),
+        a.get("participants", ""),
+    ),
+    "delete_file": lambda a: _delete_file(a["file_id"]),
 }
 
 
@@ -434,6 +486,43 @@ TOOL_SCHEMAS: list[dict] = [
                     "date": _s("Reminder date in 'YYYY-MM-DD'."),
                 },
                 "required": ["text", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "annotations": {"read_only_hint": False},  # invites others -> needs approval
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Create a calendar event and invite participants by email. "
+            "Use when the user wants to set up a meeting with other people.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": _s("Short title of the event."),
+                    "date": _s("Event date in 'YYYY-MM-DD'."),
+                    "time": _s("Start time 'HH:MM' (24h). Defaults to 09:00."),
+                    "duration_min": {
+                        "type": "integer",
+                        "description": "Length in minutes. Defaults to 60.",
+                    },
+                    "participants": _s("Comma-separated participant emails to invite."),
+                },
+                "required": ["title", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "annotations": {"read_only_hint": False},  # destructive -> needs approval
+        "function": {
+            "name": "delete_file",
+            "description": "Permanently delete a file from the user's drive by its id. "
+            "Destructive and irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {"file_id": _s("The id of the file to delete.")},
+                "required": ["file_id"],
             },
         },
     },
