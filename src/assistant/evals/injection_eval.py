@@ -18,7 +18,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import tools
+from ..agent import tools
 from ..trace import capture
 from . import agent_eval
 

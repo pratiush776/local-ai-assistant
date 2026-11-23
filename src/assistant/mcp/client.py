@@ -18,8 +18,8 @@ import anyio
 from mcp import Client
 from mcp.types import TextContent
 
-from assistant import tools
-from assistant.mcp_server import mcp as _server
+from assistant.agent import tools
+from assistant.mcp.server import mcp as _server
 
 
 def _to_agent_schema(t) -> dict:

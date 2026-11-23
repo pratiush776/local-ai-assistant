@@ -4,7 +4,8 @@ Deterministic — they read the real persona inbox and never touch the model or 
 Ground truths verified against data/assets/persona/inbox.json.
 """
 
-from assistant import mcp_client, tools
+from assistant.agent import tools
+from assistant.mcp import client as mcp_client
 
 
 def test_search_is_case_insensitive_and_reads_the_body():

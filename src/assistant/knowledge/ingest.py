@@ -1,7 +1,7 @@
 """Ingest every file in one or more folders into the chunk store.
 
-    uv run python -m assistant.ingest_folder data/assets/persona/files data/assets/persona/documents
-    uv run python -m assistant.ingest_folder --fresh <folders...>   # wipe the store first
+    uv run python -m assistant.knowledge.ingest data/assets/persona/files data/assets/persona/documents
+    uv run python -m assistant.knowledge.ingest --fresh <folders...>   # wipe the store first
 
 Each file goes through rag.ingest() (Docling -> HybridChunker -> content-hash ids ->
 embed -> upsert). --fresh empties the chunks table first, for switching corpora cleanly

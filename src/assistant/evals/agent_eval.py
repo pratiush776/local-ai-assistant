@@ -22,7 +22,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import agent, mcp_client, tools
+from .. import agent
+from ..agent import tools
+from ..mcp import client as mcp_client
 from ..trace import capture
 from .agent_checks import CHECKS
 from .stats import wilson
@@ -149,7 +151,7 @@ def run(limit: int | None = None, framework: bool = False) -> None:
     tasks = load_tasks()[:limit] if limit else load_tasks()
     driver, label, tag = drive, "hand-written loop (agent.py)", "ours"
     if framework:
-        from .. import agent_pydantic
+        from ..agent import pydantic_loop as agent_pydantic
 
         driver, label, tag = (
             agent_pydantic.drive,

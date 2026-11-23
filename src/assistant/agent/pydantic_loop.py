@@ -29,8 +29,8 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
-from assistant import tools
-from assistant.agent import AGENT_SYSTEM, MAX_STEPS
+from assistant.agent import tools
+from assistant.agent.loop import AGENT_SYSTEM, MAX_STEPS
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
 # Ollama speaks the OpenAI chat-completions API on /v1; no API key for a local server.

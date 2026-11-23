@@ -20,10 +20,10 @@ from typing import Literal
 
 import httpx
 
-from . import rag
-from .claude import client as claude_client
 from .context import messages_to_text
-from .decide import decide
+from .knowledge import rag
+from .models.claude import client as claude_client
+from .router import decide
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 PRIMARY_LOCAL_MODEL = "qwen3.5:9b"
@@ -135,7 +135,8 @@ def respond_resume(
 ) -> Iterator[Event]:
     """Continue an action turn after a human approved/denied a write. The surface
     (CLI/GUI) calls this with the approval_request's data once it has the answer."""
-    from assistant import agent, mcp_client
+    from assistant import agent
+    from assistant.mcp import client as mcp_client
 
     answer = yield from _drive_agent(
         agent.resume_agent(state, name, args, approved, mcp_client.SCHEMAS)
@@ -282,7 +283,8 @@ def respond(
 
     # ---- action: hand off to the agent loop (tools + approval) ----
     if label == "action":
-        from assistant import agent, mcp_client  # local import avoids a circular import
+        from assistant import agent  # local import avoids a circular import
+        from assistant.mcp import client as mcp_client
 
         yield Event("status", "Working on it…")
         answer = yield from _drive_agent(

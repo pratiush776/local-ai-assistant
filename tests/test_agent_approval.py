@@ -3,7 +3,8 @@
 Fake tools + a scripted model, so these are deterministic and never touch Ollama.
 """
 
-from assistant import agent, tools
+from assistant import agent
+from assistant.agent import tools
 
 # A scripted assistant turn that asks to run the write tool `add_reminder`.
 WRITE_CALL = {
@@ -41,7 +42,7 @@ def _recording_run_tool(ran):
 
 def test_write_waits_for_approval(monkeypatch):
     ran = []
-    monkeypatch.setattr(agent, "_chat", _scripted_chat([WRITE_CALL]))
+    monkeypatch.setattr(agent.loop, "_chat", _scripted_chat([WRITE_CALL]))
     monkeypatch.setattr(tools, "run_tool", _recording_run_tool(ran))
 
     events = list(agent.run_agent("remind me to do x", [], []))
@@ -57,7 +58,7 @@ def test_write_waits_for_approval(monkeypatch):
 
 def test_approve_runs_the_write(monkeypatch):
     ran = []
-    monkeypatch.setattr(agent, "_chat", _scripted_chat([WRITE_CALL, FINAL]))
+    monkeypatch.setattr(agent.loop, "_chat", _scripted_chat([WRITE_CALL, FINAL]))
     monkeypatch.setattr(tools, "run_tool", _recording_run_tool(ran))
 
     events = list(agent.run_agent("remind me", [], []))
@@ -94,7 +95,7 @@ def test_format_approval_shows_long_body_in_full_and_description():
 
 def test_deny_skips_the_write_and_replies(monkeypatch):
     ran = []
-    monkeypatch.setattr(agent, "_chat", _scripted_chat([WRITE_CALL, FINAL]))
+    monkeypatch.setattr(agent.loop, "_chat", _scripted_chat([WRITE_CALL, FINAL]))
     monkeypatch.setattr(tools, "run_tool", _recording_run_tool(ran))
 
     events = list(agent.run_agent("remind me", [], []))

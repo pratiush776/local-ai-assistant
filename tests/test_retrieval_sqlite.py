@@ -46,7 +46,7 @@ def backend(tmp_path, monkeypatch):
     monkeypatch.setattr(sq, "DB_PATH", tmp_path / "rag.db")
     monkeypatch.setattr(sq, "_local", threading.local())
     # fake embed so hybrid_retrieve never calls Ollama
-    from assistant import rag
+    from assistant.knowledge import rag
 
     qv = np.array(_unit_vec(0), dtype="float32")
     monkeypatch.setattr(

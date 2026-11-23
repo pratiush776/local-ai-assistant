@@ -76,7 +76,7 @@ def _fts_query(question: str) -> str:
 
 class SQLiteBackend:
     def hybrid_retrieve(self, question: str, k: int) -> list[tuple[str, str, float]]:
-        from assistant import rag  # lazy: avoids a circular import at load
+        from assistant.knowledge import rag  # lazy: avoids a circular import at load
 
         rrf_k = rag.RRF_K
         qvec = serialize_float32(rag.embed([question], "search_query")[0])
@@ -119,7 +119,7 @@ class SQLiteBackend:
         return [(meta[rid][0], meta[rid][1], score) for rid, score in top]
 
     def ingest(self, path: str) -> dict:
-        from assistant import rag
+        from assistant.knowledge import rag
 
         doc = DocumentConverter().convert(path).document
         chunker = HybridChunker()

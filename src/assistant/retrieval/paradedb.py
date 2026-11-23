@@ -18,7 +18,7 @@ DSN = "postgresql://postgres:rag@localhost:5432/postgres"
 
 class ParadeDBBackend:
     def hybrid_retrieve(self, question: str, k: int) -> list[tuple[str, str, float]]:
-        from assistant import rag  # lazy: avoids a circular import at load
+        from assistant.knowledge import rag  # lazy: avoids a circular import at load
 
         SQL = """
 WITH vec AS (
@@ -43,7 +43,7 @@ ORDER BY rrf DESC LIMIT %(k)s;
         return [(cid, text, float(rrf)) for cid, text, rrf in rows]
 
     def ingest(self, path: str) -> dict:
-        from assistant import rag
+        from assistant.knowledge import rag
 
         doc = DocumentConverter().convert(path).document
         chunker = HybridChunker()

@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import rag
+from ..knowledge import rag
 from ..respond import respond
 from ..trace import record_turn
 from . import checks

@@ -15,14 +15,17 @@ from pathlib import Path
 import gradio as gr
 import httpx
 
-from . import mcp_client, rag
-from .agent import format_approval
-from .respond import respond, respond_resume
-from .trace import capture
+from ..agent import format_approval
+from ..knowledge import rag
+from ..mcp import client as mcp_client
+from ..respond import respond, respond_resume
+from ..trace import capture
 
-# real modules (not the shadowed `respond`/`decide` names) for live config writes
-_RESP = sys.modules[f"{__package__}.respond"]
-_DEC = sys.modules[f"{__package__}.decide"]
+# The real modules for live config writes. We fetch them from sys.modules (not via
+# `import assistant.respond`) because the package __init__ rebinds `respond`/`decide`
+# to FUNCTIONS, so a plain import would hand us the function, not the module.
+_RESP = sys.modules["assistant.respond"]
+_DEC = sys.modules["assistant.router.decide"]
 
 MEMORY_DIR = Path("data/docs")
 

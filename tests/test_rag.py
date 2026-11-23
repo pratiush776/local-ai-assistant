@@ -1,4 +1,4 @@
-from assistant import rag
+from assistant.knowledge import rag
 
 
 def test_format_context_numbers_hits_1_indexed():

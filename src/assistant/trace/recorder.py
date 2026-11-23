@@ -6,8 +6,8 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from . import rag
-from .respond import Event
+from ..knowledge import rag
+from ..respond import Event
 
 TRACE_DIR = Path("data/traces")
 CHUNKS_FILE = TRACE_DIR / "chunks.jsonl"

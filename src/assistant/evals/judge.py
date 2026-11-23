@@ -6,7 +6,7 @@ labels (method 5.4). Local model first; escalate to Haiku only if TPR or TNR < 0
 
 import httpx
 
-from ..claude import client as claude_client
+from ..models.claude import client as claude_client
 
 LOCAL_JUDGE = "qwen3.5:9b"
 HAIKU_JUDGE = "claude-haiku-5-5"

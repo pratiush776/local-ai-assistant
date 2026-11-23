@@ -14,7 +14,7 @@ import httpx
 import numpy as np
 from sentence_transformers import CrossEncoder
 
-from .retrieval import get_backend
+from assistant.retrieval import get_backend
 
 # --- config (single source of truth, backend-agnostic) ---
 OLLAMA_URL = "http://localhost:11434/api/"

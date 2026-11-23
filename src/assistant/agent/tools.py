@@ -26,7 +26,8 @@ from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
-from assistant import rag, security
+from assistant.agent import security
+from assistant.knowledge import rag
 
 PERSONA_TODAY = "2024-05-15"
 DB_PATH = Path("data/assistant.db")

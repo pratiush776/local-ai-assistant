@@ -2,7 +2,7 @@
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-from assistant import tools
+from assistant.agent import tools
 
 mcp = MCPServer("Local MCP")
 

@@ -11,8 +11,9 @@ from collections.abc import Iterator
 
 import httpx
 
-from assistant import mcp_client, security, tools
-from assistant.ollama import OLLAMA_URL
+from assistant.agent import security, tools
+from assistant.mcp import client as mcp_client
+from assistant.models.ollama import OLLAMA_URL
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
 MAX_STEPS = 8  # hard ceiling on model calls (cost/time)

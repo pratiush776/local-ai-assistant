@@ -9,7 +9,7 @@ import anthropic
 import httpx
 
 from .context import estimate_tokens, messages_to_text, trim_history
-from .ollama import ask_with_stream
+from .models.ollama import ask_with_stream
 from .respond import PRIMARY_LOCAL_MODEL, respond, respond_resume
 from .trace import capture
 

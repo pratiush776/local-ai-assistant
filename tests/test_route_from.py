@@ -1,4 +1,4 @@
-from assistant.decide import route_from
+from assistant.router import route_from
 
 
 def test_clear_winner_routes_local():

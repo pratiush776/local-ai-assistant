@@ -1,4 +1,5 @@
-from assistant import agent, tools
+from assistant import agent
+from assistant.agent import tools
 from assistant.evals import agent_eval
 
 
@@ -38,7 +39,7 @@ def test_agent_eval_seeds_and_scores_disposable_state(tmp_path, monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(agent, "_chat", scripted_chat)
+    monkeypatch.setattr(agent.loop, "_chat", scripted_chat)
     task = {"id": "OWN2", "task": "Remind me to buy milk", "kind": "write"}
     task["check"] = "check_milk_reminder"
     assert agent_eval.run_task(task)["passed"]
