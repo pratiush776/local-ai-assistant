@@ -97,7 +97,12 @@ def _allowlist_policy(name: str, args: dict, tainted: bool) -> str | None:
 def _taint_policy(name: str, args: dict, tainted: bool) -> str | None:
     """Layer d: once the run has read untrusted content, an outbound call to a
     non-contact is refused even if the allowlist layer is off (content-blind)."""
-    if LAYER_D and tainted and name in OUTBOUND_TOOLS and not recipient_allowed(name, args):
+    if (
+        LAYER_D
+        and tainted
+        and name in OUTBOUND_TOOLS
+        and not recipient_allowed(name, args)
+    ):
         return (
             f"Blocked: injection defence — this run has read untrusted content, so "
             f"'{name}' to a non-contact recipient was refused without sending."

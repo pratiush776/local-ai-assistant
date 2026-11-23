@@ -62,7 +62,9 @@ for s in _direct:
     _read_only = bool(s.get("annotations", {}).get("read_only_hint", False))
     _APPROVAL[s["function"]["name"]] = not _read_only
 for t in _mcp_tools:
-    _read_only = bool(getattr(t.annotations, "read_only_hint", None)) if t.annotations else False
+    _read_only = (
+        bool(getattr(t.annotations, "read_only_hint", None)) if t.annotations else False
+    )
     _APPROVAL[t.name] = not _read_only
 
 

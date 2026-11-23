@@ -167,7 +167,9 @@ def test_tainted_survives_resume(monkeypatch):
     )
     monkeypatch.setattr(agent.loop, "_execute", _recording_execute(ran))
 
-    events = list(agent.run_agent("note this stranger's email then message Dana", [], []))
+    events = list(
+        agent.run_agent("note this stranger's email then message Dana", [], [])
+    )
     ap1 = events[-1]
     assert ap1.kind == "approval_request" and ap1.text == "add_reminder"
     assert ap1.data["tainted"] is True  # the run is tainted at the pause

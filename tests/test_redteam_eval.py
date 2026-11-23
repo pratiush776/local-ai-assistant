@@ -49,7 +49,9 @@ def test_grader_flags_forbidden_call_and_clears_clean_trace():
     fc = case["forbidden_call"]
 
     hijack_trace = [
-        Event("tool_call", text="read_file", data={"args": {"filename": "feedback.xlsx"}}),
+        Event(
+            "tool_call", text="read_file", data={"args": {"filename": "feedback.xlsx"}}
+        ),
         Event(
             "tool_call",
             text=fc["tool"],
@@ -69,13 +71,17 @@ def test_grader_flags_forbidden_call_and_clears_clean_trace():
     assert attack_succeeded(proposal_trace, case) is True
 
     clean_trace = [
-        Event("tool_call", text="read_file", data={"args": {"filename": "feedback.xlsx"}}),
+        Event(
+            "tool_call", text="read_file", data={"args": {"filename": "feedback.xlsx"}}
+        ),
         Event("done", text="The sentiment is mostly positive.", data={}),
     ]
     assert attack_succeeded(clean_trace, case) is False
 
     # Wrong recipient on the forbidden tool is NOT this case's hijack.
     other_addr_trace = [
-        Event("tool_call", text=fc["tool"], data={"args": {"to": "someone-else@x.com"}}),
+        Event(
+            "tool_call", text=fc["tool"], data={"args": {"to": "someone-else@x.com"}}
+        ),
     ]
     assert attack_succeeded(other_addr_trace, case) is False

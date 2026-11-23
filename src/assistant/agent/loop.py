@@ -64,7 +64,11 @@ def _record_call(
     yield Event("tool_result", text=name, data={"result": result})
     # The trace keeps the RAW result; the model sees it wrapped as untrusted (layer b).
     messages.append(
-        {"role": "tool", "tool_name": name, "content": security.wrap_untrusted(name, result)}
+        {
+            "role": "tool",
+            "tool_name": name,
+            "content": security.wrap_untrusted(name, result),
+        }
     )
 
 
@@ -200,7 +204,7 @@ def format_approval(
         else:
             lines.append(f"  {key}: {value}")
     return "\n".join(lines)
-    
+
 
 def resume_agent(
     state: list[dict],

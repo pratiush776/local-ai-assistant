@@ -198,7 +198,8 @@ def check_email_sent(answer: str, conn: sqlite3.Connection) -> bool:
     # now sit in the outbox (send_email writes locally, never the network).
     rows = conn.execute("SELECT recipient, body FROM outbox").fetchall()
     return any(
-        "mark.davies@hotmail.com" in (r["recipient"] or "") and (r["body"] or "").strip()
+        "mark.davies@hotmail.com" in (r["recipient"] or "")
+        and (r["body"] or "").strip()
         for r in rows
     )
 
