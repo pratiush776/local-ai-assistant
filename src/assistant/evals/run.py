@@ -318,6 +318,11 @@ def main() -> None:
 
         injection_eval.run()
         return
+    if "--redteam" in sys.argv:
+        from . import redteam_eval
+
+        redteam_eval.run()
+        return
     if "--label" in sys.argv:
         label_rows()
         return
