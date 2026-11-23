@@ -72,6 +72,26 @@ def test_approve_runs_the_write(monkeypatch):
     assert resumed[-1].kind == "done"
 
 
+def test_format_approval_renders_any_tool_faithfully():
+    # Generic: a tool we never wrote still renders, with its real args (WYSIWYS).
+    out = agent.format_approval("gmail.trash", {"message_id": "x1", "permanent": True})
+    assert "Action: gmail.trash" in out
+    assert "message_id: x1" in out
+    assert "permanent: True" in out
+
+
+def test_format_approval_shows_long_body_in_full_and_description():
+    body = "line one\nline two that is also here\n" + "x" * 80
+    out = agent.format_approval(
+        "send_email",
+        {"to": "a@b.com", "subject": "Hi", "body": body},
+        description="Send an email to a recipient.",
+    )
+    assert "(Send an email to a recipient.)" in out  # description shown as context
+    assert "line two that is also here" in out  # multi-line body not truncated
+    assert "x" * 80 in out  # long value kept in full
+
+
 def test_deny_skips_the_write_and_replies(monkeypatch):
     ran = []
     monkeypatch.setattr(agent, "_chat", _scripted_chat([WRITE_CALL, FINAL]))

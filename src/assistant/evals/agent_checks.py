@@ -179,6 +179,30 @@ def check_unread_list(answer: str, conn: sqlite3.Connection) -> bool:
     return sum(t in low for t in topics) >= 4
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# WRITE CHECKS (7.3) — inspect the DB state the write should have left.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def check_reunion_event_created(answer: str, conn: sqlite3.Connection) -> bool:
+    # UTW1 (write, the Done-when): a 'Family Reunion' event must now start
+    # 2024-06-10 13:00 (read from the emails; "four hours long" is the duration).
+    rows = conn.execute(
+        "SELECT start FROM events WHERE title LIKE ?", ("%reunion%",)
+    ).fetchall()
+    return any(r["start"].startswith("2024-06-10T13:00") for r in rows)
+
+
+def check_email_sent(answer: str, conn: sqlite3.Connection) -> bool:
+    # UTW2 (write): an email to mark.davies@hotmail.com with a non-empty body must
+    # now sit in the outbox (send_email writes locally, never the network).
+    rows = conn.execute("SELECT recipient, body FROM outbox").fetchall()
+    return any(
+        "mark.davies@hotmail.com" in (r["recipient"] or "") and (r["body"] or "").strip()
+        for r in rows
+    )
+
+
 # Registry: task's `check` name -> function. The runner looks checks up here.
 CHECKS = {
     "check_dinner_location": check_dinner_location,
@@ -198,4 +222,6 @@ CHECKS = {
     "check_hiking_details": check_hiking_details,
     "check_techservices_reset_link": check_techservices_reset_link,
     "check_unread_list": check_unread_list,
+    "check_reunion_event_created": check_reunion_event_created,
+    "check_email_sent": check_email_sent,
 }

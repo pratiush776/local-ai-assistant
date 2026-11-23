@@ -71,6 +71,18 @@ def needs_approval(name: str) -> bool:
     return _APPROVAL.get(name, True)
 
 
+# name -> the tool's menu description (what the model reads to pick it). The approval
+# screen shows this as context; it stays subordinate to the real args (see format_approval).
+DESCRIPTIONS: dict[str, str] = {
+    s["function"]["name"]: s["function"].get("description", "") for s in SCHEMAS
+}
+
+
+def describe(name: str) -> str:
+    """The tool's own description, or '' if unknown."""
+    return DESCRIPTIONS.get(name, "")
+
+
 async def _acall(name: str, args: dict) -> str:
     async with Client(_server) as client:
         res = await client.call_tool(name, args)

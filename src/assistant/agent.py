@@ -5,6 +5,7 @@ asks for, feed results back, repeat — until it answers or a stop condition tri
 """
 
 import json
+import textwrap
 import time
 from collections.abc import Iterator
 
@@ -136,6 +137,30 @@ def needs_approval(name: str) -> bool:
     # Risk rides on each tool (its read_only_hint annotation); the client reads it.
     return mcp_client.needs_approval(name)
 
+
+def format_approval(name: str, args: dict, description: str | None = None) -> str:
+    """Render a pending write as the exact payload the user approves (WYSIWYS):
+    the REAL argument values, never a paraphrase — this view is the authorization.
+
+    Generic on purpose: it walks whatever args the tool carries, so a tool we never
+    wrote (a foreign MCP server's) renders just as faithfully as our own. Long or
+    multi-line values (an email body, a file's content) are shown in full on their
+    own indented lines so nothing important is hidden; short values sit inline.
+
+    `description` is the tool's own menu description — helpful context, shown as a
+    subordinate line. It is tool/server-provided text (untrusted for a foreign
+    server), so it never replaces the args: the args remain what is authorized."""
+    lines = [f"Action: {name}"]
+    if description:
+        lines.append(f"  ({description.strip()})")
+    for key, value in args.items():
+        value = str(value)
+        if "\n" in value or len(value) > 60:
+            lines.append(f"  {key}:\n{textwrap.indent(value, '    ')}")
+        else:
+            lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
+    
 
 def resume_agent(
     state: list[dict], name: str, args: dict, approved: bool, tool_schemas: list[dict]

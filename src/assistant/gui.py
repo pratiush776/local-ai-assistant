@@ -15,7 +15,8 @@ from pathlib import Path
 import gradio as gr
 import httpx
 
-from . import rag
+from . import mcp_client, rag
+from .agent import format_approval
 from .respond import respond, respond_resume
 from .trace import capture
 
@@ -237,14 +238,19 @@ def _stream_frames(stream, ctx, clean, turn_cites):
 
 def _ask_frame(ctx, pause, clean, turn_cites):
     """Pause the turn: show the exact pending write and reveal the buttons."""
-    ctx["flow"].append(
-        f"**⏸ approve** `{pause.text}`(`{pause.data.get('args', {})}`)**?**"
-    )
+    # The faithful payload the user authorizes (WYSIWYS): real args + the tool's own
+    # description as subordinate context. A monospace block wraps/scrolls inside the
+    # chat; the Approve/Deny buttons sit in a separate fixed row, so a long body
+    # can't push them off-screen.
+    args = pause.data.get("args", {})
+    payload = format_approval(pause.text, args, mcp_client.describe(pause.text))
+    ctx["flow"].append(f"**⏸ approve `{pause.text}`?**")
     # Signal the pause in the chat itself, not just the Flow tab: the bubble
     # otherwise stays on "Working on it…" and reads as stuck.
     ctx["display"][-1]["content"] = (
-        f"⏸ **Approval needed.** I'd like to run `{pause.text}` with "
-        f"`{pause.data.get('args', {})}`.\n\nClick **✓ Approve** or **✗ Deny** below."
+        "⏸ **Approval needed.** I'd like to run this:\n\n"
+        f"```\n{payload}\n```\n\n"
+        "Click **✓ Approve** or **✗ Deny** below."
     )
     pending = {
         "state": pause.data["state"],

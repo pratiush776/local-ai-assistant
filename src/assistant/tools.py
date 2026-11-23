@@ -101,6 +101,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, date TEXT,
                 done INTEGER DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT, subject TEXT,
+                body TEXT, sent_at TEXT DEFAULT (datetime('now')));
         """)
         # migrate an events table created before participants/description existed
         have = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
@@ -215,6 +218,18 @@ def _add_reminder(text: str, date: str) -> str:
     return f"Reminder set for {date}: {text}"
 
 
+def _send_email(to: str, subject: str, body: str) -> str:
+    """Write to the LOCAL outbox table — never the network (draft-don't-send). A
+    real deployment would swap this body to create a provider draft; the agent, the
+    approval gate and the schema above it stay identical."""
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO outbox (recipient,subject,body) VALUES (?,?,?)",
+            (to, subject, body),
+        )
+    return f"Email to {to} saved to the outbox (subject: {subject!r})."
+
+
 # --- email (read-only, 7.2) --------------------------------------------------
 # The "account" is one JSON file here; in a real deployment an OAuth token would
 # identify which mailbox these tools read. The tools expose `body`, never the
@@ -276,6 +291,7 @@ _BODIES = {
     "search_emails": lambda a: _search_emails(a["query"]),
     "get_unread_emails": lambda a: _get_unread_emails(),
     "get_email": lambda a: _get_email(a["email_id"]),
+    "send_email": lambda a: _send_email(a["to"], a["subject"], a["body"]),
 }
 
 

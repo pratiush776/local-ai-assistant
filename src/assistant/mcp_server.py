@@ -42,6 +42,14 @@ def get_email(email_id: str) -> str:
     return tools.run_tool("get_email", {"email_id": email_id})
 
 
+# --- block 2c: write actions (7.3). read_only_hint=False -> the approval gate fires. ---
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=False))
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send an email to a recipient. Writes to the local outbox for review;
+    nothing leaves the machine. Requires the user's approval before it runs."""
+    return tools.run_tool("send_email", {"to": to, "subject": subject, "body": body})
+
+
 # --- block 3: run over stdio when executed as a script ---
 if __name__ == "__main__":
     mcp.run()

@@ -50,3 +50,18 @@ def test_all_email_tools_are_read_only():
     for name in ("search_emails", "get_unread_emails", "get_email"):
         assert name in mcp_client.MCP_TOOL_NAMES
         assert mcp_client.needs_approval(name) is False
+
+
+def test_send_email_writes_to_outbox_and_is_gated():
+    # send_email is a WRITE: it must require approval...
+    assert mcp_client.needs_approval("send_email") is True
+    # ...and it writes to the local outbox table, never the network.
+    with tools.temporary_database() as conn:
+        out = tools.run_tool(
+            "send_email", {"to": "a@b.com", "subject": "Hi", "body": "Hello"}
+        )
+        assert "outbox" in out.lower()
+        row = conn.execute("SELECT recipient, subject, body FROM outbox").fetchone()
+        assert row["recipient"] == "a@b.com"
+        assert row["subject"] == "Hi"
+        assert row["body"] == "Hello"
