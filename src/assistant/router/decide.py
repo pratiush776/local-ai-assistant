@@ -17,6 +17,8 @@ from typing import Literal, cast
 import httpx
 from pydantic import BaseModel
 
+from ..models.ollama import LOCAL_CONTEXT_WINDOW
+
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen3.5:9b"  # the MLX build (bare tag; the GGUF is -q4_K_M)
 
@@ -31,6 +33,7 @@ LABEL_RULES = """- action: needs a tool and your approval to change something in
 - fact: the user is asking for a specific real-world fact, name, date, number, or current/personal info they do not provide — choose fact EVEN IF you think you know it. (Asking you to create, write, suggest, or brainstorm something is NOT fact.)
 - reason: answering needs calculation or multi-step deduction — choose reason even if it looks simple.
 - chat: needs nothing external and no calculation — writing, rewriting, summarising, translating, giving an opinion, or creating/brainstorming/suggesting open-ended content (ideas, plans, lists), even if it draws on general knowledge.
+Treat a personal update or preference shared without a request as chat. An update about what the user is doing is not a request for you to take an action. A fact the user supplies is not a fact lookup.
 If several fit, pick the first in this order: action, fact, reason, chat."""
 
 LABEL_EXAMPLES = """Request: Write a short poem about autumn.
@@ -38,6 +41,10 @@ Answer: chat
 Request: Create a workout plan to strengthen my upper body.
 Answer: chat
 Request: Give me some ideas for a 5-year-old's birthday party.
+Answer: chat
+Request: I've switched to tea in the mornings.
+Answer: chat
+Request: I'm going back to a one-book limit at the library.
 Answer: chat
 Request: Who won the Nobel Prize in Physics in 2019?
 Answer: fact
@@ -81,7 +88,11 @@ Answer:"""
         "stream": False,
         "logprobs": True,
         "top_logprobs": 8,
-        "options": {"temperature": 0, "num_predict": 1},
+        "options": {
+            "num_ctx": LOCAL_CONTEXT_WINDOW,
+            "temperature": 0,
+            "num_predict": 1,
+        },
     }
     r = httpx.post(OLLAMA_URL, json=payload, timeout=120)
     r.raise_for_status()

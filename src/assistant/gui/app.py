@@ -10,6 +10,8 @@ its cited sources. Same `respond()` as the CLI; this is presentation only.
 
 import shutil
 import sys
+from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 
 import gradio as gr
@@ -20,6 +22,8 @@ from ..knowledge import rag
 from ..mcp import client as mcp_client
 from ..respond import respond, respond_resume
 from ..trace import capture
+from ..trace.recorder import read_memory_result
+from . import memory_panel
 
 # The real modules for live config writes. We fetch them from sys.modules (not via
 # `import assistant.respond`) because the package __init__ rebinds `respond`/`decide`
@@ -59,6 +63,12 @@ footer { display: none !important; }
 #rail .tabitem { max-height: calc(100vh - 96px); overflow-y: auto; padding-right: 6px; }
 #content, #flow { font-size: 13.5px; line-height: 1.5; padding-right: 8px; }
 button.primary { background: #15130f !important; color: #faf8f4 !important; }
+@media (max-width: 720px) {
+    #assistant-layout { flex-direction: column; }
+    #rail { flex: 1 1 auto !important; min-width: 0 !important; width: 100%;
+        border-left: 0; border-top: 1px solid #e7e2d9; padding: 12px 0 0; }
+    #chat { height: 52vh !important; }
+}
 """
 
 
@@ -99,7 +109,7 @@ def _render(nav: list, last_cite: dict):
     back = gr.update(visible=len(nav) > 1)
     if view == "files":
         return (
-            "### Memory",
+            "",
             back,
             gr.update(choices=_choices(), value=None, label="Your files", visible=True),
             "*Select a file to read its contents.*",
@@ -149,9 +159,15 @@ def open_sources(turn_cites, cur_cite, nav, evt: gr.SelectData):
     idx = evt.index[0] if isinstance(evt.index, list) else evt.index
     cite = turn_cites.get(idx) or turn_cites.get(str(idx))
     if not cite or not cite.get("ids"):
-        return (gr.update(), cur_cite, nav, *_render(nav, cur_cite))
+        return (gr.skip(), gr.skip(), cur_cite, nav, *_render(nav, cur_cite))
     nav2 = [("files", None), ("cites", None)]
-    return (gr.Tabs(selected="memory"), cite, nav2, *_render(nav2, cite))
+    return (
+        gr.Tabs(selected="memory"),
+        gr.Tabs(selected="memory-files"),
+        cite,
+        nav2,
+        *_render(nav2, cite),
+    )
 
 
 # ---------------- the turn ----------------
@@ -181,6 +197,44 @@ def _flow_md(lines: list[str], timings: dict) -> str:
     return md
 
 
+def _memory_flow(trace: dict, result: dict | None = None) -> str:
+    turn_id = escape(trace["turn_id"])
+    model = escape(trace["memory"]["model"])
+    trigger = (
+        "explicit remember request"
+        if trace["memory"]["trigger"] == "remember_request"
+        else "chat turn finished"
+    )
+    lines = [
+        "<h4>Memory · last completed chat turn</h4>",
+        f"<p>Trigger: {trigger} · Trace <code>{turn_id}</code> · {model}</p>",
+    ]
+    if result is None:
+        return "".join([*lines, "<p>Queued for background extraction.</p>"])
+    if result.get("error"):
+        lines.append(f"<p>Memory job failed: {escape(result['error'])}</p>")
+    elif not result["writes"]:
+        lines.append("<p>No confirmed facts to write.</p>")
+    for write in result["writes"]:
+        row = f" · row {write['id']}" if write["id"] is not None else ""
+        lines.append(
+            f"<p><strong>{escape(write['action'])}{row}</strong> "
+            f"{escape(write['candidate'])}<br>"
+            f"<small>Source quote: {escape(write['evidence'])}</small></p>"
+        )
+        if write["previous"]:
+            lines.append(f"<p><small>Previous: {escape(write['previous'])}</small></p>")
+        if write["reason"]:
+            lines.append(f"<p><small>{escape(write['reason'])}</small></p>")
+    return "".join(lines)
+
+
+def _refresh_memory_flow(trace: dict | None):
+    if trace is None or (result := read_memory_result(trace)) is None:
+        return gr.skip(), gr.skip()
+    return _memory_flow(trace, result), gr.update(active=False)
+
+
 _BLANK = {"text": "", "files": []}
 
 
@@ -190,11 +244,24 @@ def _apply_event(ev, ctx: dict) -> None:
         ctx["flow"].append(f"- {ev.text}")
         if not ctx["answer"]:
             ctx["display"][-1]["content"] = f"<sub>· {ev.text}</sub>"
+    elif ev.kind == "compaction":
+        ctx["flow"].append(f"- {ev.text}")
+        if "history" in ev.data:
+            ctx["history"] = ev.data["history"]
     elif ev.kind == "route":
         ctx["route_txt"] = ev.data["label"] or ev.data["route"]
         ctx["flow"].append(
             f"**Route:** `{ctx['route_txt']}` · conf {ev.data['confidence']:.2f}"
         )
+    elif ev.kind == "memory_recall":
+        ctx["flow"].append(f"- {ev.text}")
+        for fact in ev.data["facts"]:
+            safe = (
+                escape(" ".join(fact.split()))
+                .replace("[", "&#91;")
+                .replace("`", "&#96;")
+            )
+            ctx["flow"].append(f"  - {safe}")
     elif ev.kind == "delta":
         ctx["answer"] += ev.text
         ctx["final"] = ctx["answer"]
@@ -225,6 +292,9 @@ def _frame(ctx: dict, clean, turn_cites, *, ask=False, pending=None):
         gr.update(visible=ask),
         gr.update(visible=ask),
         pending,
+        gr.skip(),
+        gr.skip(),
+        gr.skip(),
     )
 
 
@@ -274,12 +344,17 @@ def _ask_frame(ctx, pause, clean, turn_cites):
 
 def _finish(ctx, clean, turn_cites):
     """Persist the trace and emit the final, buttons-hidden frame."""
-    capture(ctx["text"], ctx["events"])
+    trace = capture(
+        ctx["text"],
+        ctx["events"],
+        memory_source_time=ctx["observed_at"],
+        memory_model=_RESP.PRIMARY_LOCAL_MODEL,
+    )
     display = ctx["display"]
     display[-1]["content"] = ctx["final"] + _meta(
         ctx["route_txt"], ctx["timings"], bool(ctx["cids"])
     )
-    new_clean = clean + [
+    new_clean = ctx.get("history", clean) + [
         {"role": "user", "content": ctx["text"]},
         {"role": "assistant", "content": ctx["final"]},
     ]
@@ -295,6 +370,9 @@ def _finish(ctx, clean, turn_cites):
         gr.update(visible=False),
         gr.update(visible=False),
         None,
+        {"turn_id": trace["turn_id"], "memory": trace["memory"]},
+        _memory_flow(trace),
+        gr.update(active=True),
     )
 
 
@@ -324,6 +402,9 @@ def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
             hide,
             hide,
             None,
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
         )
         return
 
@@ -335,6 +416,7 @@ def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
     ]
 
     ctx = {
+        "observed_at": datetime.now(UTC),
         "display": display,
         "flow": ["**Flow**"],
         "answer": "",
@@ -349,7 +431,10 @@ def chat_fn(payload, display, clean, last_cite, turn_cites, pending):
     }
 
     pause = yield from _stream_frames(
-        respond(text, clean, force_escalate=force), ctx, clean, turn_cites
+        respond(text, clean, force_escalate=force, use_memory=True),
+        ctx,
+        clean,
+        turn_cites,
     )
     if pause is not None:  # a write is waiting — reveal Approve/Deny and stop
         yield _ask_frame(ctx, pause, clean, turn_cites)
@@ -434,6 +519,9 @@ def clear_all():
         gr.update(visible=False),  # approve_btn
         gr.update(visible=False),  # deny_btn
         None,  # pending_state
+        None,  # memory_trace_state
+        "",  # memory_flow
+        gr.update(active=False),
         *_render(nav, empty),
     )
 
@@ -477,8 +565,11 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     nav_state = gr.State([("files", None)])
     turn_cites_state = gr.State({})
     pending_state = gr.State(None)  # a paused action turn awaiting Approve/Deny
+    memory_trace_state = gr.State(None)
+    selected_memory_state = gr.State(None)
+    memory_confirmation_state = gr.State(None)
 
-    with gr.Row(equal_height=False):
+    with gr.Row(equal_height=False, elem_id="assistant-layout"):
         with gr.Column(scale=1, elem_id="maincol"):
             with gr.Row():
                 clear_btn = gr.Button("New chat", scale=0, size="sm", elem_id="newchat")
@@ -502,20 +593,75 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     )
         with gr.Column(scale=0, min_width=360, elem_id="rail"):
             with gr.Tabs() as rail_tabs:
-                with gr.Tab("Memory", id="memory"):
-                    with gr.Row():
-                        back_btn = gr.Button("← Back", scale=0, visible=False)
-                    rail_title = gr.Markdown("### Memory")
-                    selector = gr.Radio(
-                        choices=[], label="Your files", interactive=True
-                    )
-                    content = gr.Markdown(
-                        "*Select a file to read its contents.*", elem_id="content"
-                    )
+                with gr.Tab("Memory", id="memory") as memory_tab:
+                    with gr.Tabs(elem_id="memory-views") as memory_views:
+                        with gr.Tab("Saved facts", id="saved-facts") as saved_tab:
+                            memory_select = gr.Radio(
+                                [],
+                                value=None,
+                                label="Saved facts",
+                                show_label=False,
+                                interactive=True,
+                                elem_id="saved-facts-list",
+                            )
+                            with gr.Group(
+                                visible=False, elem_id="saved-fact-detail"
+                            ) as memory_detail:
+                                memory_summary = gr.HTML("")
+                                with gr.Row(elem_id="saved-fact-actions"):
+                                    memory_edit = gr.Button("Edit", size="sm")
+                                    memory_forget = gr.Button("Forget…", size="sm")
+                            with gr.Group(visible=False) as memory_editor:
+                                memory_text = gr.Textbox(
+                                    label="Edit saved fact", lines=3
+                                )
+                                with gr.Row():
+                                    memory_cancel_edit = gr.Button(
+                                        "Cancel edit", size="sm"
+                                    )
+                                    memory_save = gr.Button(
+                                        "Save edit", size="sm", variant="primary"
+                                    )
+                            with gr.Group(
+                                visible=False, elem_id="saved-fact-confirm"
+                            ) as memory_confirmation:
+                                gr.Markdown("**Forget this saved fact?**")
+                                with gr.Row():
+                                    memory_cancel_forget = gr.Button(
+                                        "Keep fact", size="sm"
+                                    )
+                                    memory_confirm = gr.Button(
+                                        "Confirm forget", variant="stop", size="sm"
+                                    )
+                            memory_message = gr.HTML(
+                                visible=False, elem_id="saved-fact-status"
+                            )
+                            memory_reload = gr.Button(
+                                "Refresh facts",
+                                size="sm",
+                                scale=0,
+                                elem_id="saved-fact-refresh",
+                            )
+                        with gr.Tab("Files", id="memory-files"):
+                            with gr.Row():
+                                back_btn = gr.Button("← Back", scale=0, visible=False)
+                            rail_title = gr.Markdown("")
+                            selector = gr.Dropdown(
+                                choices=[],
+                                label="Your files",
+                                interactive=True,
+                                value=None,
+                            )
+                            content = gr.Markdown(
+                                "*Select a file to read its contents.*",
+                                elem_id="content",
+                            )
                 with gr.Tab("Flow", id="flow"):
                     flow_md = gr.Markdown(
                         "*Send a message to see the routing flow.*", elem_id="flow"
                     )
+                    memory_flow = gr.HTML("")
+                    memory_timer = gr.Timer(1.0, active=False)
                 with gr.Tab("Settings", id="settings"):
                     ollama = _ollama_models()
                     with gr.Accordion("Models", open=True):
@@ -573,6 +719,49 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     apply_status = gr.Markdown("")
 
     render_out = [rail_title, back_btn, selector, content]
+    saved_out = [
+        memory_select,
+        selected_memory_state,
+        memory_detail,
+        memory_summary,
+        memory_editor,
+        memory_text,
+        memory_confirmation,
+        memory_confirmation_state,
+        memory_message,
+    ]
+    demo.load(memory_panel.load_memories, outputs=saved_out)
+    for change in (
+        memory_tab.select,
+        saved_tab.select,
+        memory_select.input,
+        memory_reload.click,
+    ):
+        change(memory_panel.load_memories, [memory_select], saved_out)
+    memory_edit.click(
+        memory_panel.open_edit,
+        [selected_memory_state],
+        [memory_editor, memory_text, memory_confirmation, memory_confirmation_state],
+    )
+    memory_forget.click(
+        memory_panel.open_confirmation,
+        [selected_memory_state],
+        [memory_editor, memory_confirmation, memory_confirmation_state],
+    )
+    memory_cancel_edit.click(lambda: gr.update(visible=False), outputs=memory_editor)
+    memory_cancel_forget.click(
+        lambda: (gr.update(visible=False), None),
+        outputs=[memory_confirmation, memory_confirmation_state],
+    )
+    memory_save.click(
+        memory_panel.save_edit, [selected_memory_state, memory_text], saved_out
+    )
+    memory_confirm.click(
+        memory_panel.forget,
+        [memory_confirmation_state],
+        saved_out,
+        api_visibility="private",
+    )
     chat_out = [
         msg,
         chatbot,
@@ -583,7 +772,18 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
         approve_btn,
         deny_btn,
         pending_state,
+        memory_trace_state,
+        memory_flow,
+        memory_timer,
     ]
+    memory_timer.tick(
+        _refresh_memory_flow,
+        [memory_trace_state],
+        [memory_flow, memory_timer],
+        queue=False,
+        api_visibility="private",
+        show_progress="hidden",
+    )
     sub = msg.submit(
         chat_fn,
         [msg, chatbot, clean_state, cite_state, turn_cites_state, pending_state],
@@ -601,7 +801,7 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     chatbot.select(
         open_sources,
         [turn_cites_state, cite_state, nav_state],
-        [rail_tabs, cite_state, nav_state, *render_out],
+        [rail_tabs, memory_views, cite_state, nav_state, *render_out],
     )
     selector.input(go_pick, [selector, nav_state, cite_state], [nav_state, *render_out])
     back_btn.click(go_back, [nav_state, cite_state], [nav_state, *render_out])
@@ -619,6 +819,9 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
             approve_btn,
             deny_btn,
             pending_state,
+            memory_trace_state,
+            memory_flow,
+            memory_timer,
             *render_out,
         ],
     )
@@ -644,7 +847,7 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
 
 
 def main() -> None:
-    demo.launch(theme=gr.themes.Monochrome(), css=CSS)
+    demo.launch(theme=gr.themes.Monochrome(), css=CSS + memory_panel.CSS)
 
 
 if __name__ == "__main__":

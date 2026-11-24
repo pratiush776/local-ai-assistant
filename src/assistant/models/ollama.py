@@ -3,15 +3,46 @@ import json
 import httpx
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
+LOCAL_CONTEXT_WINDOW = 8192
 TEMPERATURE = 0.7
 
 
-def ask_without_stream(messages: list[dict], model: str) -> str:
-    payload = {"model": model, "messages": messages, "think": False, "stream": False}
+def chat_message(
+    messages: list[dict],
+    model: str,
+    *,
+    tools: list[dict] | None = None,
+    options: dict[str, int | float] | None = None,
+    format_schema: dict | None = None,
+) -> dict:
+    """Return Ollama's assistant message, including any proposed tool calls."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "think": False,
+        "stream": False,
+        "options": {"num_ctx": LOCAL_CONTEXT_WINDOW, **(options or {})},
+    }
+    if tools is not None:
+        payload["tools"] = tools
+    if format_schema is not None:
+        payload["format"] = format_schema
     response = httpx.post(OLLAMA_URL, json=payload, timeout=120)
     response.raise_for_status()
-    data = response.json()
-    return data["message"]["content"]
+    return response.json()["message"]
+
+
+def ask_without_stream(
+    messages: list[dict],
+    model: str,
+    *,
+    options: dict[str, int | float] | None = None,
+    format_schema: dict | None = None,
+) -> str:
+    message = chat_message(
+        messages, model, options=options, format_schema=format_schema
+    )
+    return message["content"]
 
 
 def ask_with_stream(
@@ -23,6 +54,7 @@ def ask_with_stream(
         "think": False,
         "stream": True,
         "options": {
+            "num_ctx": LOCAL_CONTEXT_WINDOW,
             "temperature": TEMPERATURE,
         },
     }

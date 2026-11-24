@@ -7,6 +7,7 @@ labels (method 5.4). Local model first; escalate to Haiku only if TPR or TNR < 0
 import httpx
 
 from ..models.claude import client as claude_client
+from ..models.ollama import LOCAL_CONTEXT_WINDOW
 
 LOCAL_JUDGE = "qwen3.5:9b"
 HAIKU_JUDGE = "claude-haiku-5-5"
@@ -32,7 +33,7 @@ def _complete(system: str, user: str, model: str = JUDGE_MODEL) -> str:
         ],
         "think": False,
         "stream": False,
-        "options": {"temperature": 0},  # deterministic grading
+        "options": {"num_ctx": LOCAL_CONTEXT_WINDOW, "temperature": 0},
     }
     r = httpx.post(OLLAMA_CHAT_URL, json=payload, timeout=120)
     r.raise_for_status()

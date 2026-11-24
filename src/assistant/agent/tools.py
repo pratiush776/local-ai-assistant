@@ -28,9 +28,9 @@ from pathlib import Path
 
 from assistant.agent import security
 from assistant.knowledge import rag
+from assistant.storage import APP_DB_PATH as DB_PATH
 
 PERSONA_TODAY = "2024-05-15"
-DB_PATH = Path("data/assistant.db")
 CALENDAR_SEED = Path("data/assets/persona/calendar.json")
 FILES_INDEX = Path("data/assets/persona/files_index.json")
 INBOX = Path("data/assets/persona/inbox.json")  # Emma's mailbox (read-only in 7.2)

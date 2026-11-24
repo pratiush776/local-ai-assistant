@@ -5,15 +5,15 @@ the answer. All the logic lives in `respond()`; this file only does I/O. The dem
 GUI (`gui.py`) consumes the same `respond()`.
 """
 
+from datetime import UTC, datetime
+
 import anthropic
 import httpx
 
-from .context import estimate_tokens, messages_to_text, trim_history
 from .models.ollama import ask_with_stream
 from .respond import PRIMARY_LOCAL_MODEL, respond, respond_resume
 from .trace import capture
 
-CONTEXT_BUDGET = 4096
 DIM, RESET = "\033[2m", "\033[0m"
 
 
@@ -26,8 +26,12 @@ def _consume(stream, events: list, state: dict):
     for a write, else None. Accumulates the final answer into state['answer']."""
     for ev in stream:
         events.append(ev)
-        if ev.kind in ("status", "route"):
+        if ev.kind in ("status", "route", "memory_recall"):
             _trace(ev.text)
+        elif ev.kind == "compaction":
+            _trace(ev.text)
+            if "history" in ev.data:
+                state["history"] = ev.data["history"]
         elif ev.kind == "tool_call":
             _trace(f"→ {ev.text}({ev.data.get('args', {})})")
         elif ev.kind == "tool_result":
@@ -70,9 +74,14 @@ def chat() -> None:
             continue
 
         state, events = {"answer": "", "started": False}, []
+        observed_at = datetime.now(UTC)
         try:
             pause = _consume(
-                respond(user_msg, messages, force_escalate=escalate_next), events, state
+                respond(
+                    user_msg, messages, force_escalate=escalate_next, use_memory=True
+                ),
+                events,
+                state,
             )
             while pause is not None:  # a write is waiting — ask, then resume
                 ok = input(
@@ -90,7 +99,12 @@ def chat() -> None:
                     events,
                     state,
                 )
-            capture(user_msg, events)
+            capture(
+                user_msg,
+                events,
+                memory_source_time=observed_at,
+                memory_model=PRIMARY_LOCAL_MODEL,
+            )
         except (httpx.HTTPError, anthropic.APIError):
             print("\n[network error — nothing stored]")
             escalate_next = False
@@ -101,10 +115,10 @@ def chat() -> None:
         print()
 
         escalate_next = False
-        messages.append({"role": "user", "content": user_msg})
-        messages.append({"role": "assistant", "content": answer})
-        ctx = estimate_tokens(messages_to_text(messages))
-        messages, _ = trim_history(messages, ctx, CONTEXT_BUDGET)
+        messages = state.get("history", messages) + [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": answer},
+        ]
 
 
 def main() -> None:

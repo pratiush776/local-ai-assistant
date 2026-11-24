@@ -3,10 +3,11 @@
 import json
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from ..knowledge import rag
+from ..memory.background import enqueue_turn
 from ..respond import Event
 
 TRACE_DIR = Path("data/traces")
@@ -37,9 +38,15 @@ def record_turn(user_msg: str, events: list[Event]) -> dict:
         if ev.kind == "route":
             rec["route"] = ev.data["route"]
             rec["label"] = ev.data["label"]
+        elif ev.kind == "compaction":
+            rec["compaction"] = {
+                key: val for key, val in ev.data.items() if key != "history"
+            }
         elif ev.kind == "retrieval":
             rec["retrieved"] = ev.data["chunks"]
             rec["kept"] = [c["id"] for c in ev.data["chunks"] if c["kept"]]
+        elif ev.kind == "memory_recall":
+            rec["memory_recall"] = ev.data
         elif ev.kind == "citations":
             rec["citations"] = ev.data["ids"]
         elif ev.kind == "tool_call":
@@ -92,9 +99,64 @@ def write_chunks(cids: list[str]) -> None:
                 f.write(json.dumps({"cid": cid, "text": texts[cid]}) + "\n")
 
 
-def capture(user_msg: str, events: list[Event]) -> dict:
+def capture(
+    user_msg: str,
+    events: list[Event],
+    *,
+    memory_source_time: datetime | None = None,
+    memory_model: str | None = None,
+) -> dict:
     """One call both surfaces make after a turn: fold -> persist -> freeze text."""
     rec = record_turn(user_msg, events)
+    memory_result = None
+    statement = next(
+        (
+            ev.data["remember_statement"]
+            for ev in events
+            if "remember_statement" in ev.data
+        ),
+        None,
+    )
+    if memory_source_time is not None and memory_model is not None:
+        memory_result = Path("memory") / f"{rec['turn_id']}.json"
+        rec["memory_observed_at"] = memory_source_time.isoformat()
+        rec["memory"] = {
+            "status": "queued",
+            "trigger": "remember_request" if statement else "completed_chat_turn",
+            "model": memory_model,
+            "result": memory_result.as_posix(),
+        }
     write_trace(rec)
     write_chunks([c["id"] for c in rec["retrieved"]])
+    if memory_result is not None:
+        enqueue_turn(
+            statement or user_msg,
+            observed_at=memory_source_time,
+            source_trace_id=rec["turn_id"],
+            model=memory_model,
+            results_path=TRACE_DIR / memory_result,
+        )
     return rec
+
+
+def read_memory_result(record: dict) -> dict | None:
+    """Read the outcome linked from a chat trace, if the background job finished."""
+    path = TRACE_DIR / record["memory"]["result"]
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
+def find_turn(turn_id: str) -> dict | None:
+    """Look up a source turn in the daily chat traces."""
+    for path in sorted(TRACE_DIR.glob("????-??-??.jsonl"), reverse=True):
+        with path.open(encoding="utf-8") as traces:
+            for line in traces:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("turn_id") == turn_id:
+                    return record
+    return None

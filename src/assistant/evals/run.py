@@ -303,6 +303,16 @@ def compare_runs(path_a: str, path_b: str) -> None:
 def main() -> None:
     import sys
 
+    if "--memory" in sys.argv:
+        from .memory_eval import run
+
+        run([arg for arg in sys.argv[1:] if arg != "--memory"])
+        return
+    if "--compaction" in sys.argv:
+        from .compaction_eval import run
+
+        run()
+        return
     if "--agent" in sys.argv:
         from . import agent_eval
 

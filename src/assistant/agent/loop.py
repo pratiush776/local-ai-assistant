@@ -13,7 +13,7 @@ import httpx
 
 from assistant.agent import security, tools
 from assistant.mcp import client as mcp_client
-from assistant.models.ollama import OLLAMA_URL
+from assistant.models.ollama import LOCAL_CONTEXT_WINDOW, OLLAMA_URL
 from assistant.respond import PRIMARY_LOCAL_MODEL, Event
 
 MAX_STEPS = 8  # hard ceiling on model calls (cost/time)
@@ -38,6 +38,7 @@ def _chat(messages: list[dict], tool_schemas: list[dict]) -> dict:
         "tools": tool_schemas,
         "think": False,
         "stream": False,
+        "options": {"num_ctx": LOCAL_CONTEXT_WINDOW},
     }
     resp = httpx.post(OLLAMA_URL, json=payload, timeout=MAX_SECONDS)
     resp.raise_for_status()
