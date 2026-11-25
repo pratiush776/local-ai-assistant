@@ -12,6 +12,7 @@ from html import escape
 import gradio as gr
 
 from ..agent import format_approval, resume_agent
+from ..agent import tools as agent_tools
 from ..jobs import (
     get_pending,
     list_deliveries,
@@ -20,6 +21,7 @@ from ..jobs import (
     resolve_pending,
 )
 from ..mcp import client as mcp_client
+from ..respond import Event
 from ..trace.recorder import record_turn, write_trace
 
 
@@ -72,6 +74,19 @@ def approve(selected_id: int | None):
     p = get_pending(selected_id) if selected_id else None
     if p is None:
         return load_inbox(None, "Select a pending action first.")
+    if not p.state:
+        # A suggestion (9.3): no paused agent behind it, so run the tool directly.
+        result = agent_tools.run_tool(p.name, p.args)
+        record = record_turn(
+            f"[approved suggestion] {p.title}",
+            [
+                Event(kind="tool_call", text=p.name, data={"args": p.args}),
+                Event(kind="tool_result", text=p.name, data={"result": result}),
+            ],
+        )
+        write_trace(record)
+        resolve_pending(p.id, True)
+        return load_inbox(None, f"Approved — ran {p.name}.")
     # Run the approved write for real, then continue the job. The loop stops again
     # at the NEXT write (if any), which we re-queue so nothing runs unapproved.
     events, follow = [], None

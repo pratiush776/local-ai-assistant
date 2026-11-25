@@ -8,6 +8,7 @@ the last turn), and Settings (every live knob). Click an answer bubble to open
 its cited sources. Same `respond()` as the CLI; this is presentation only.
 """
 
+import logging
 import shutil
 import sys
 from datetime import UTC, datetime, timedelta
@@ -18,9 +19,11 @@ import gradio as gr
 import httpx
 
 from ..agent import format_approval
+from ..agent.tools import PERSONA_TODAY
 from ..jobs import Job
 from ..jobs.briefs import morning_brief_job
 from ..jobs.scheduler import build_scheduler, schedule_job
+from ..jobs.suggest import scan_inbox
 from ..knowledge import rag
 from ..mcp import client as mcp_client
 from ..respond import respond, respond_resume
@@ -66,6 +69,31 @@ def _run_brief_soon():
         value=(
             f"<p class='inbox-status'>Morning brief scheduled for {when:%H:%M:%S} UTC "
             f"(~1 min). It runs headless — watch Briefs below.</p>"
+        ),
+        visible=True,
+    )
+
+
+def _run_scan():
+    """Scan unread email for dated commitments and queue proposals (Lesson 9.3)."""
+    try:
+        n = scan_inbox(model=_RESP.PRIMARY_LOCAL_MODEL, today=PERSONA_TODAY)
+        logging.getLogger(__name__).info("suggestion scan queued %d proposal(s)", n)
+    except Exception:
+        logging.getLogger(__name__).exception("suggestion scan failed")
+
+
+def _scan_now():
+    """Run a suggestion scan on a background thread; hits appear in the Inbox to
+    approve. Runs headless like the other jobs so the UI never blocks on the model."""
+    when = datetime.now(UTC) + timedelta(seconds=2)
+    _scheduler.add_job(
+        _run_scan, "date", run_date=when, id="suggest-scan-now", replace_existing=True
+    )
+    return gr.update(
+        value=(
+            "<p class='inbox-status'>Scanning unread email for commitments — "
+            "proposals will appear above in a few seconds.</p>"
         ),
         visible=True,
     )
@@ -719,6 +747,9 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     inbox_status = gr.HTML("", visible=False)
                     with gr.Row():
                         inbox_refresh = gr.Button("Refresh", size="sm", scale=0)
+                        inbox_scan = gr.Button(
+                            "🔎 Scan email for commitments", size="sm", scale=0
+                        )
                         inbox_demo = gr.Button(
                             "⏱ Schedule demo job (+1 min)", size="sm", scale=0
                         )
@@ -850,6 +881,7 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     inbox_approve.click(inbox_panel.approve, [inbox_select], inbox_out)
     inbox_deny.click(inbox_panel.deny, [inbox_select], inbox_out)
     inbox_demo.click(_schedule_demo_job, None, inbox_status)
+    inbox_scan.click(_scan_now, None, inbox_status)
 
     briefs_out = [inbox_briefs, inbox_brief_body]
     demo.load(inbox_panel.load_briefs, outputs=briefs_out)
@@ -952,6 +984,10 @@ def main() -> None:
     # Register the real recurring jobs, then start the scheduler. (Jobs live in the
     # in-memory store, so they are re-registered on each launch — see 9.1 parking note.)
     schedule_job(_scheduler, morning_brief_job(), "cron", hour=7, minute=0)
+    # Daily suggestion scan: read new mail, queue any dated commitments for approval.
+    _scheduler.add_job(
+        _run_scan, "cron", hour=7, minute=5, id="suggest-scan", replace_existing=True
+    )
     _scheduler.start()  # background jobs run while the app is up
     demo.launch(
         theme=gr.themes.Monochrome(),

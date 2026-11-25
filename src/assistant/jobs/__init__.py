@@ -9,16 +9,20 @@ from .pending import (
     resolve_pending,
 )
 from .runner import Job, run_job
+from .suggest import Proposal, propose_reminder, scan_inbox
 
 __all__ = [
     "Delivery",
     "Job",
     "PendingAction",
+    "Proposal",
     "deliver",
     "get_pending",
     "list_deliveries",
     "list_pending",
+    "propose_reminder",
     "queue_pending",
     "resolve_pending",
     "run_job",
+    "scan_inbox",
 ]
