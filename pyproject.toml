@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=2.3.0",
+    "apscheduler>=3.11,<4",
     "bm25s>=0.3.16",
     "docling>=2.148.0",
     "fastapi>=0.162.0",

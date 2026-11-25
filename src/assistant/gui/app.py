@@ -10,7 +10,7 @@ its cited sources. Same `respond()` as the CLI; this is presentation only.
 
 import shutil
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -18,18 +18,58 @@ import gradio as gr
 import httpx
 
 from ..agent import format_approval
+from ..jobs import Job
+from ..jobs.briefs import morning_brief_job
+from ..jobs.scheduler import build_scheduler, schedule_job
 from ..knowledge import rag
 from ..mcp import client as mcp_client
 from ..respond import respond, respond_resume
 from ..trace import capture
 from ..trace.recorder import read_memory_result
-from . import memory_panel
+from . import inbox_panel, memory_panel
 
 # The real modules for live config writes. We fetch them from sys.modules (not via
 # `import assistant.respond`) because the package __init__ rebinds `respond`/`decide`
 # to FUNCTIONS, so a plain import would hand us the function, not the module.
 _RESP = sys.modules["assistant.respond"]
 _DEC = sys.modules["assistant.router.decide"]
+
+# One in-process scheduler for background jobs (Unit 9). Started in main().
+_scheduler = build_scheduler()
+
+
+def _schedule_demo_job():
+    """Lesson 9.1 Done-when: schedule a job to run itself ~1 min from now, with
+    nobody watching. Its proposed write should appear in the Inbox on its own."""
+    when = datetime.now(UTC) + timedelta(seconds=60)
+    job = Job(
+        id="demo-inbox",
+        title="Demo: expense-report reminder",
+        prompt="Add a reminder to submit the expense report on 2024-05-16.",
+    )
+    schedule_job(_scheduler, job, "date", run_date=when)
+    return gr.update(
+        value=(
+            f"<p class='inbox-status'>Scheduled “{job.title}” for "
+            f"{when:%H:%M:%S} UTC (~1 min). It runs headless — watch it appear here.</p>"
+        ),
+        visible=True,
+    )
+
+
+def _run_brief_soon():
+    """Schedule the morning brief to run ~1 min from now (so the Done-when is
+    testable in-session); the real daily cron is registered in main()."""
+    when = datetime.now(UTC) + timedelta(seconds=60)
+    schedule_job(_scheduler, morning_brief_job(), "date", run_date=when)
+    return gr.update(
+        value=(
+            f"<p class='inbox-status'>Morning brief scheduled for {when:%H:%M:%S} UTC "
+            f"(~1 min). It runs headless — watch Briefs below.</p>"
+        ),
+        visible=True,
+    )
+
 
 MEMORY_DIR = Path("data/docs")
 
@@ -662,6 +702,39 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                     )
                     memory_flow = gr.HTML("")
                     memory_timer = gr.Timer(1.0, active=False)
+                with gr.Tab("Inbox", id="inbox") as inbox_tab:
+                    inbox_select = gr.Radio(
+                        [],
+                        value=None,
+                        label="Pending from background jobs",
+                        interactive=True,
+                        elem_id="inbox-list",
+                    )
+                    inbox_detail = gr.HTML("", visible=False)
+                    with gr.Row(visible=False) as inbox_actions:
+                        inbox_approve = gr.Button(
+                            "✓ Approve", variant="primary", size="sm"
+                        )
+                        inbox_deny = gr.Button("✗ Deny", variant="stop", size="sm")
+                    inbox_status = gr.HTML("", visible=False)
+                    with gr.Row():
+                        inbox_refresh = gr.Button("Refresh", size="sm", scale=0)
+                        inbox_demo = gr.Button(
+                            "⏱ Schedule demo job (+1 min)", size="sm", scale=0
+                        )
+                    gr.Markdown("---\n#### Briefs & notifications")
+                    inbox_briefs = gr.Radio(
+                        [],
+                        value=None,
+                        label="",
+                        interactive=True,
+                        elem_id="briefs-list",
+                    )
+                    inbox_brief_body = gr.Markdown("")
+                    inbox_brief_now = gr.Button(
+                        "⏱ Run morning brief in 1 min", size="sm", scale=0
+                    )
+                    inbox_timer = gr.Timer(3.0, active=True)
                 with gr.Tab("Settings", id="settings"):
                     ollama = _ollama_models()
                     with gr.Accordion("Models", open=True):
@@ -762,6 +835,35 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
         saved_out,
         api_visibility="private",
     )
+    inbox_out = [inbox_select, inbox_detail, inbox_actions, inbox_status]
+    demo.load(inbox_panel.load_inbox, outputs=inbox_out)
+    for ev in (inbox_tab.select, inbox_select.input, inbox_refresh.click):
+        ev(inbox_panel.load_inbox, [inbox_select], inbox_out)
+    inbox_timer.tick(
+        inbox_panel.load_inbox,
+        [inbox_select],
+        inbox_out,
+        queue=False,
+        api_visibility="private",
+        show_progress="hidden",
+    )
+    inbox_approve.click(inbox_panel.approve, [inbox_select], inbox_out)
+    inbox_deny.click(inbox_panel.deny, [inbox_select], inbox_out)
+    inbox_demo.click(_schedule_demo_job, None, inbox_status)
+
+    briefs_out = [inbox_briefs, inbox_brief_body]
+    demo.load(inbox_panel.load_briefs, outputs=briefs_out)
+    inbox_briefs.input(inbox_panel.load_briefs, [inbox_briefs], briefs_out)
+    inbox_timer.tick(
+        inbox_panel.load_briefs,
+        [inbox_briefs],
+        briefs_out,
+        queue=False,
+        api_visibility="private",
+        show_progress="hidden",
+    )
+    inbox_brief_now.click(_run_brief_soon, None, inbox_status)
+
     chat_out = [
         msg,
         chatbot,
@@ -847,7 +949,14 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
 
 
 def main() -> None:
-    demo.launch(theme=gr.themes.Monochrome(), css=CSS + memory_panel.CSS)
+    # Register the real recurring jobs, then start the scheduler. (Jobs live in the
+    # in-memory store, so they are re-registered on each launch — see 9.1 parking note.)
+    schedule_job(_scheduler, morning_brief_job(), "cron", hour=7, minute=0)
+    _scheduler.start()  # background jobs run while the app is up
+    demo.launch(
+        theme=gr.themes.Monochrome(),
+        css=CSS + memory_panel.CSS + inbox_panel.CSS,
+    )
 
 
 if __name__ == "__main__":
