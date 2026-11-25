@@ -80,8 +80,9 @@ Today is {today}.
 Set has_commitment = true ONLY when BOTH hold:
 - the email is a genuine event, meeting, or personal commitment for Emma, from a real \
 person (not a company blast); and
-- it names a specific date, or a relative date you can resolve against today (e.g. \
-"Saturday 18th", "next Wednesday", "tomorrow").
+- it names a specific date, a relative date you can resolve against today (e.g. \
+"Saturday 18th", "next Wednesday", "tomorrow"), or a relative period like "this \
+weekend" or "next weekend" — resolve a weekend to its Saturday.
 
 Set has_commitment = false for: promotions, marketing, newsletters, event offers, \
 social-network notifications, security or verification codes, two-factor codes, \

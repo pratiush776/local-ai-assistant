@@ -10,6 +10,7 @@ import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from .control import jobs_enabled
 from .runner import Job, run_job
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,11 @@ def schedule_job(
 
 def _run_safely(job: Job) -> None:
     """Run one job, catching failures so a bad job logs instead of killing the
-    scheduler thread. (Per-job budgets and a retry policy come in Lesson 9.4.)"""
+    scheduler thread. The kill switch is checked here, so a paused system's jobs
+    stay registered but no-op. (The per-job budget lives on the Job itself.)"""
+    if not jobs_enabled():
+        log.info("job %s skipped — background jobs are paused (kill switch)", job.id)
+        return
     try:
         pending_id = run_job(job)
         log.info("job %s ran; pending=%s", job.id, pending_id)

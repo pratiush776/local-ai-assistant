@@ -176,3 +176,37 @@ def test_brief_not_delivered_when_no_tool_was_called(monkeypatch):
     )
     assert run_job(job) is None
     assert delivered == []  # nothing delivered: absence beats a fabricated brief
+
+
+def test_job_budget_is_passed_to_the_loop(monkeypatch):
+    # The Job's per-job budget reaches run_agent, not the module default.
+    seen = {}
+
+    def fake_run_agent(prompt, history, schemas, *, max_steps, max_seconds):
+        seen["max_steps"] = max_steps
+        seen["max_seconds"] = max_seconds
+        return iter([])  # no events -> run_job just traces and returns None
+
+    monkeypatch.setattr(runner.loop, "run_agent", fake_run_agent)
+    monkeypatch.setattr(runner, "record_turn", lambda p, e: {"turn_id": "t"})
+    monkeypatch.setattr(runner, "write_trace", lambda r: None)
+
+    run_job(Job(id="j", title="J", prompt="p", max_steps=3, max_seconds=30))
+    assert seen == {"max_steps": 3, "max_seconds": 30}
+
+
+def test_kill_switch_skips_scheduled_jobs(monkeypatch):
+    from assistant.jobs import control, scheduler
+
+    ran = []
+    monkeypatch.setattr(scheduler, "run_job", lambda job: ran.append(job.id))
+
+    control.set_jobs_enabled(False)
+    try:
+        scheduler._run_safely(Job(id="paused", title="x", prompt="p"))
+        assert ran == []  # kill switch on -> job did not run
+        control.set_jobs_enabled(True)
+        scheduler._run_safely(Job(id="live", title="x", prompt="p"))
+        assert ran == ["live"]  # switch off -> job runs
+    finally:
+        control.set_jobs_enabled(True)  # don't leak state into other tests

@@ -22,6 +22,7 @@ from ..agent import format_approval
 from ..agent.tools import PERSONA_TODAY
 from ..jobs import Job
 from ..jobs.briefs import morning_brief_job
+from ..jobs.control import jobs_enabled, set_jobs_enabled
 from ..jobs.scheduler import build_scheduler, schedule_job
 from ..jobs.suggest import scan_inbox
 from ..knowledge import rag
@@ -74,8 +75,20 @@ def _run_brief_soon():
     )
 
 
+def _toggle_jobs(on: bool):
+    """Settings kill switch: pause/resume all background jobs (Lesson 9.4)."""
+    set_jobs_enabled(on)
+    state = "running" if on else "PAUSED"
+    return gr.update(
+        value=f"<p class='inbox-status'>Background jobs are {state}.</p>", visible=True
+    )
+
+
 def _run_scan():
     """Scan unread email for dated commitments and queue proposals (Lesson 9.3)."""
+    if not jobs_enabled():
+        logging.getLogger(__name__).info("scan skipped — background jobs paused")
+        return
     try:
         n = scan_inbox(model=_RESP.PRIMARY_LOCAL_MODEL, today=PERSONA_TODAY)
         logging.getLogger(__name__).info("suggestion scan queued %d proposal(s)", n)
@@ -788,6 +801,12 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
                         s_reranker = gr.Textbox(
                             rag.RERANKER_NAME, label="Reranker model"
                         )
+                    with gr.Accordion("Background jobs", open=True):
+                        s_jobs_on = gr.Checkbox(
+                            value=jobs_enabled(),
+                            label="Background jobs enabled (kill switch)",
+                        )
+                        s_jobs_status = gr.HTML("", visible=False)
                     with gr.Accordion("Retrieval", open=True):
                         s_topk = gr.Slider(
                             1, 50, value=rag.TOP_K, step=1, label="Top-K"
@@ -882,6 +901,7 @@ with gr.Blocks(title="assistant", fill_height=True) as demo:
     inbox_deny.click(inbox_panel.deny, [inbox_select], inbox_out)
     inbox_demo.click(_schedule_demo_job, None, inbox_status)
     inbox_scan.click(_scan_now, None, inbox_status)
+    s_jobs_on.change(_toggle_jobs, [s_jobs_on], s_jobs_status)
 
     briefs_out = [inbox_briefs, inbox_brief_body]
     demo.load(inbox_panel.load_briefs, outputs=briefs_out)

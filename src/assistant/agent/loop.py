@@ -74,7 +74,12 @@ def _record_call(
 
 
 def run_agent(
-    user_msg: str, history: list[dict], tool_schemas: list[dict]
+    user_msg: str,
+    history: list[dict],
+    tool_schemas: list[dict],
+    *,
+    max_steps: int = MAX_STEPS,
+    max_seconds: int = MAX_SECONDS,
 ) -> Iterator[Event]:
     # Don't mutate the caller's history; build our own working copy.
     # Lead with the system prompt so the model knows it HAS tools (fixes refusals).
@@ -83,20 +88,27 @@ def run_agent(
         *history,
         {"role": "user", "content": user_msg},
     ]
-    yield from _loop(messages, tool_schemas)
+    yield from _loop(messages, tool_schemas, max_steps=max_steps, max_seconds=max_seconds)
 
 
 def _loop(
-    messages: list[dict], tool_schemas: list[dict], *, tainted: bool = False
+    messages: list[dict],
+    tool_schemas: list[dict],
+    *,
+    tainted: bool = False,
+    max_steps: int = MAX_STEPS,
+    max_seconds: int = MAX_SECONDS,
 ) -> Iterator[Event]:
     """The shared loop. Both run_agent and resume_agent drive this. `tainted` is
     seeded by the caller so a run RESUMED after approval stays tainted (it is carried
-    in the approval state); a fresh run starts untainted."""
+    in the approval state); a fresh run starts untainted. `max_steps`/`max_seconds`
+    are the run's budget — they default to the module ceilings but a caller (e.g. a
+    background Job) may pass tighter ones."""
     seen: set[tuple[str, str]] = set()  # (name, args) signatures already run
     # has this run read untrusted (stranger-written) content yet?  (may arrive True)
-    deadline = time.monotonic() + MAX_SECONDS
+    deadline = time.monotonic() + max_seconds
 
-    for step in range(MAX_STEPS):
+    for step in range(max_steps):
         msg = _chat(messages, tool_schemas)
         messages.append(msg)  # keep the assistant turn WHOLE (incl. tool_calls)
 
@@ -159,11 +171,11 @@ def _loop(
             )
             return
 
-    # Fell out of the loop -> hit MAX_STEPS without a final answer.
+    # Fell out of the loop -> hit the step budget without a final answer.
     yield Event(
         "done",
         text="I reached my step limit before finishing.",
-        data={"steps": MAX_STEPS, "stopped": "max_steps"},
+        data={"steps": max_steps, "stopped": "max_steps"},
     )
 
 

@@ -31,6 +31,8 @@ class Job:
     require_tool_use: bool = (
         False  # don't deliver if the run called no tools (anti-hallucination)
     )
+    max_steps: int = 6  # per-job model-call budget (a background job runs unwatched)
+    max_seconds: int = 90  # per-job wall-clock budget
 
 
 def _schemas_for(job: Job) -> list[dict]:
@@ -54,7 +56,13 @@ def run_job(job: Job) -> int | None:
     # approval_request and returns at that write, so this scan sees it last.
     events: list[Event] = []
     pending: Event | None = None
-    for event in loop.run_agent(job.prompt, [], _schemas_for(job)):
+    for event in loop.run_agent(
+        job.prompt,
+        [],
+        _schemas_for(job),
+        max_steps=job.max_steps,
+        max_seconds=job.max_seconds,
+    ):
         events.append(event)
         if event.kind == "approval_request":
             pending = event

@@ -328,6 +328,16 @@ def main() -> None:
 
         injection_eval.run()
         return
+    if "--suggest" in sys.argv:
+        from . import suggest_eval
+
+        samples = (
+            int(sys.argv[sys.argv.index("--samples") + 1])
+            if "--samples" in sys.argv
+            else 1
+        )
+        suggest_eval.run(samples)
+        return
     if "--redteam" in sys.argv:
         from . import redteam_eval
 
