@@ -36,7 +36,9 @@ def run(samples: int = 1) -> dict:
     tp = fp = fn = tn = 0
     mistakes: list[tuple[str, dict, str]] = []  # (kind, row, what the trigger did)
 
-    print(f"\nSuggestion trigger vs commitments.jsonl  (model={MODEL}, samples={samples})\n")
+    print(
+        f"\nSuggestion trigger vs commitments.jsonl  (model={MODEL}, samples={samples})\n"
+    )
     for r in rows:
         email = by_id.get(r["email_id"])
         if email is None:
@@ -75,13 +77,19 @@ def run(samples: int = 1) -> dict:
         print("  mistakes to read (where it was wrong, and why the label says so):")
         for kind, r, did in mistakes:
             note = r["note"] or "—"
-            print(f"    {kind} [{r['email_id']}] {r['subject'][:38]}: {did}  | note: {note}")
+            print(
+                f"    {kind} [{r['email_id']}] {r['subject'][:38]}: {did}  | note: {note}"
+            )
         print()
 
     return {
         "precision": round(precision, 3),
         "recall": round(recall, 3),
         "f1": round(f1, 3),
-        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-        "model": MODEL, "samples": samples,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "model": MODEL,
+        "samples": samples,
     }

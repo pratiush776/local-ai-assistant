@@ -105,7 +105,9 @@ def _reported(message: dict) -> Proposal | None:
     if len(calls) != 1:
         return None
     fn = calls[0].get("function", {})
-    if fn.get("name") != "report_commitment" or not isinstance(fn.get("arguments"), dict):
+    if fn.get("name") != "report_commitment" or not isinstance(
+        fn.get("arguments"), dict
+    ):
         return None
     try:
         return Proposal.model_validate(fn["arguments"])
@@ -140,7 +142,9 @@ def propose_reminder(email_text: str, *, today: str, model: str) -> Proposal | N
     except ValueError:
         return None
     if not p.evidence.strip() or p.evidence.strip() not in email_text:
-        return None  # grounding: the date phrase must come from the email, not the model
+        return (
+            None  # grounding: the date phrase must come from the email, not the model
+        )
     return p
 
 
@@ -212,5 +216,7 @@ def scan_inbox(
         )
         seen.add(key)
         queued += 1
-    log.info("suggestion scan queued %d proposal(s) from %d unread", queued, len(unread))
+    log.info(
+        "suggestion scan queued %d proposal(s) from %d unread", queued, len(unread)
+    )
     return queued

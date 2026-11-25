@@ -98,7 +98,9 @@ def test_scan_dedups_and_caps(monkeypatch, tmp_path):
     db = tmp_path / "assistant.db"
     # Three unread emails; the scan proposes one reminder per email.
     monkeypatch.setattr(
-        suggest.tools, "_inbox", lambda: [_email("1", "a"), _email("2", "b"), _email("3", "c")]
+        suggest.tools,
+        "_inbox",
+        lambda: [_email("1", "a"), _email("2", "b"), _email("3", "c")],
     )
     proposals = {
         "subject 1": suggest.Proposal(has_commitment=True, what="A", when="2024-05-18"),
@@ -116,8 +118,15 @@ def test_scan_dedups_and_caps(monkeypatch, tmp_path):
 
     # Pre-queue "A" so it is already pending -> the scan must dedup it.
     queue_pending(
-        suggest.SUGGEST_JOB_ID, "Reminder: A", "x", "add_reminder",
-        {"text": "A", "date": "2024-05-18"}, [], True, "", path=db,
+        suggest.SUGGEST_JOB_ID,
+        "Reminder: A",
+        "x",
+        "add_reminder",
+        {"text": "A", "date": "2024-05-18"},
+        [],
+        True,
+        "",
+        path=db,
     )
 
     # cap=1 means: of the two NEW proposals (B, C), only one is queued this run.

@@ -88,7 +88,9 @@ def run_agent(
         *history,
         {"role": "user", "content": user_msg},
     ]
-    yield from _loop(messages, tool_schemas, max_steps=max_steps, max_seconds=max_seconds)
+    yield from _loop(
+        messages, tool_schemas, max_steps=max_steps, max_seconds=max_seconds
+    )
 
 
 def _loop(
